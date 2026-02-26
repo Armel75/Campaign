@@ -6,8 +6,8 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite" // Changed to sqlite for preview environment compatibility. Change to "sqlserver" for production.
-  url      = "file:./dev.db" // env("DATABASE_URL")
+  provider = "sqlserver" // Changed to sqlite for preview environment compatibility. Change to "sqlserver" for production.
+  url = env("DATABASE_URL")
 }
 
 model User {
@@ -155,11 +155,11 @@ model Conversion {
 model Task {
   id          String   @id @default(uuid())
   campaignId  String   @map("campaign_id")
-  campaign    Campaign @relation(fields: [campaignId], references: [id])
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   title       String
   description String?
-  assignedTo  String   @map("assigned_to")
-  assignee    User     @relation(fields: [assignedTo], references: [id])
+  assignedTo  String?   @map("assigned_to")
+  assignee    User?     @relation(fields: [assignedTo], references: [id], onDelete: NoAction, onUpdate: NoAction)
   dueDate     DateTime @map("due_date")
   status      String   // TODO, IN_PROGRESS, DONE
   createdAt   DateTime @default(now()) @map("created_at")
