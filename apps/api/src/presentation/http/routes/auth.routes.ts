@@ -20,13 +20,11 @@ router.post('/login', async (req, res, next) => {
       include: { role: true },
     });
 
-    if (!user) {
-      return res.status(401).json({ message: 'Invalid credentials' });
-    }
+    // Timing attack prevention: always perform a comparison
+    const targetHash = user?.passwordHash || '$2a$10$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN0123456789'; // Dummy hash
+    const isValid = await bcrypt.compare(password, targetHash);
 
-    const isValid = await bcrypt.compare(password, user.passwordHash);
-
-    if (!isValid) {
+    if (!user || !isValid) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
