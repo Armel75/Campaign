@@ -1,0 +1,209 @@
+// This is the Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite" // Changed to sqlite for preview environment compatibility. Change to "sqlserver" for production.
+  url      = "file:./dev.db" // env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(uuid())
+  username      String    @unique
+  email         String    @unique
+  passwordHash  String    @map("password_hash")
+  roleId        String    @map("role_id")
+  role          Role      @relation(fields: [roleId], references: [id])
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  createdCampaigns Campaign[]
+  tasks            Task[]
+  
+  @@map("users")
+}
+
+model Role {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  users     User[]
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("roles")
+}
+
+model Campaign {
+  id          String    @id @default(uuid())
+  name        String
+  description String?
+  objectiveId String    @map("objective_id")
+  objective   Objective @relation(fields: [objectiveId], references: [id])
+  startDate   DateTime  @map("start_date")
+  endDate     DateTime  @map("end_date")
+  status      String    // DRAFT, ACTIVE, PAUSED, COMPLETED
+  
+  createdById String    @map("created_by")
+  createdBy   User      @relation(fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  channels    CampaignChannel[]
+  metrics     CampaignMetric[]
+  leads       Lead[]
+  tasks       Task[]
+  expenses    Expense[]
+  attachments Attachment[]
+  kpiTargets  CampaignKpiTarget[]
+
+  @@map("campaigns")
+}
+
+model Objective {
+  id          String     @id @default(uuid())
+  code        String     @unique
+  label       String
+  description String?
+  isActive    Boolean    @default(true) @map("is_active")
+  campaigns   Campaign[]
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
+
+  @@map("objectives")
+}
+
+model TargetAudience {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("target_audiences")
+}
+
+model Channel {
+  id               String            @id @default(uuid())
+  name             String
+  description      String?
+  campaignChannels CampaignChannel[]
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+
+  @@map("channels")
+}
+
+model CampaignChannel {
+  id              String   @id @default(uuid())
+  campaignId      String   @map("campaign_id")
+  campaign        Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  channelId       String   @map("channel_id")
+  channel         Channel  @relation(fields: [channelId], references: [id])
+  budgetAllocated Decimal  @map("budget_allocated")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("campaign_channels")
+}
+
+model CampaignMetric {
+  id          String   @id @default(uuid())
+  campaignId  String   @map("campaign_id")
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  metricName  String   @map("metric_name")
+  metricValue Decimal  @map("metric_value")
+  metricDate  DateTime @default(now()) @map("metric_date")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("campaign_metrics")
+}
+
+model Lead {
+  id          String       @id @default(uuid())
+  campaignId  String       @map("campaign_id")
+  campaign    Campaign     @relation(fields: [campaignId], references: [id])
+  name        String
+  email       String
+  phone       String?
+  status      String       // NEW, CONTACTED, QUALIFIED, CONVERTED
+  conversions Conversion[]
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  @@map("leads")
+}
+
+model Conversion {
+  id             String   @id @default(uuid())
+  campaignId     String   @map("campaign_id")
+  leadId         String   @map("lead_id")
+  lead           Lead     @relation(fields: [leadId], references: [id])
+  amount         Decimal
+  conversionDate DateTime @default(now()) @map("conversion_date")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("conversions")
+}
+
+model Task {
+  id          String   @id @default(uuid())
+  campaignId  String   @map("campaign_id")
+  campaign    Campaign @relation(fields: [campaignId], references: [id])
+  title       String
+  description String?
+  assignedTo  String   @map("assigned_to")
+  assignee    User     @relation(fields: [assignedTo], references: [id])
+  dueDate     DateTime @map("due_date")
+  status      String   // TODO, IN_PROGRESS, DONE
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("tasks")
+}
+
+model Expense {
+  id          String   @id @default(uuid())
+  campaignId  String   @map("campaign_id")
+  campaign    Campaign @relation(fields: [campaignId], references: [id])
+  description String
+  amount      Decimal
+  expenseDate DateTime @map("expense_date")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("expenses")
+}
+
+model Attachment {
+  id         String   @id @default(uuid())
+  fileName   String
+  filePath   String
+  entityType String   @map("entity_type") // CAMPAIGN, TASK, etc.
+  entityId   String   @map("entity_id")
+  campaignId String?  @map("campaign_id") // Optional direct link for easier querying
+  campaign   Campaign? @relation(fields: [campaignId], references: [id])
+  uploadedAt DateTime @default(now())
+
+  @@map("attachments")
+}
+
+model CampaignKpiTarget {
+  id          String   @id @default(uuid())
+  campaignId  String   @map("campaign_id")
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  kpiName     String   @map("kpi_name")
+  targetValue Decimal  @map("target_value")
+  periodStart DateTime @map("period_start")
+  periodEnd   DateTime @map("period_end")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("campaign_kpi_targets")
+}
