@@ -1,6 +1,5 @@
 import GenericTable from '@/components/GenericTable';
 import { useNavigate } from 'react-router-dom';
-import { Badge } from '@/components/ui/badge'; // Assuming badge exists or I'll simulate it
 
 export default function CampaignList() {
   const navigate = useNavigate();

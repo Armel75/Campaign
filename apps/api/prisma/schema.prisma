@@ -11,15 +11,15 @@ datasource db {
 }
 
 model User {
-  id            String    @id @default(uuid())
+  id            Int    @id @default(autoincrement())
   username      String    @unique
   email         String    @unique
   passwordHash  String    @map("password_hash")
-  roleId        String    @map("role_id")
+  roleId        Int    @map("role_id")
   role          Role      @relation(fields: [roleId], references: [id])
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
-
+  refreshSessions RefreshSession[]
   // Relations
   createdCampaigns Campaign[]
   tasks            Task[]
@@ -28,7 +28,7 @@ model User {
 }
 
 model Role {
-  id        String   @id @default(uuid())
+  id        Int   @id @default(autoincrement())
   name      String   @unique
   users     User[]
   createdAt DateTime @default(now()) @map("created_at")
@@ -38,16 +38,16 @@ model Role {
 }
 
 model Campaign {
-  id          String    @id @default(uuid())
+  id          Int    @id @default(autoincrement())
   name        String
   description String?
-  objectiveId String    @map("objective_id")
+  objectiveId Int    @map("objective_id")
   objective   Objective @relation(fields: [objectiveId], references: [id])
   startDate   DateTime  @map("start_date")
   endDate     DateTime  @map("end_date")
   status      String    // DRAFT, ACTIVE, PAUSED, COMPLETED
   
-  createdById String    @map("created_by")
+  createdById Int    @map("created_by")
   createdBy   User      @relation(fields: [createdById], references: [id])
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
@@ -65,7 +65,7 @@ model Campaign {
 }
 
 model Objective {
-  id          String     @id @default(uuid())
+  id          Int     @id @default(autoincrement())
   code        String     @unique
   label       String
   description String?
@@ -78,7 +78,7 @@ model Objective {
 }
 
 model TargetAudience {
-  id          String   @id @default(uuid())
+  id          Int   @id @default(autoincrement())
   name        String
   description String?
   createdAt   DateTime @default(now()) @map("created_at")
@@ -88,7 +88,7 @@ model TargetAudience {
 }
 
 model Channel {
-  id               String            @id @default(uuid())
+  id               Int            @id @default(autoincrement())
   name             String
   description      String?
   campaignChannels CampaignChannel[]
@@ -99,10 +99,10 @@ model Channel {
 }
 
 model CampaignChannel {
-  id              String   @id @default(uuid())
-  campaignId      String   @map("campaign_id")
+  id              Int   @id @default(autoincrement())
+  campaignId      Int   @map("campaign_id")
   campaign        Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  channelId       String   @map("channel_id")
+  channelId       Int  @map("channel_id")
   channel         Channel  @relation(fields: [channelId], references: [id])
   budgetAllocated Decimal  @map("budget_allocated")
   createdAt       DateTime @default(now()) @map("created_at")
@@ -112,8 +112,8 @@ model CampaignChannel {
 }
 
 model CampaignMetric {
-  id          String   @id @default(uuid())
-  campaignId  String   @map("campaign_id")
+  id          Int   @id @default(autoincrement())
+  campaignId  Int   @map("campaign_id")
   campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   metricName  String   @map("metric_name")
   metricValue Decimal  @map("metric_value")
@@ -125,8 +125,8 @@ model CampaignMetric {
 }
 
 model Lead {
-  id          String       @id @default(uuid())
-  campaignId  String       @map("campaign_id")
+  id          Int       @id @default(autoincrement())
+  campaignId  Int       @map("campaign_id")
   campaign    Campaign     @relation(fields: [campaignId], references: [id])
   name        String
   email       String
@@ -140,9 +140,9 @@ model Lead {
 }
 
 model Conversion {
-  id             String   @id @default(uuid())
-  campaignId     String   @map("campaign_id")
-  leadId         String   @map("lead_id")
+  id             Int   @id @default(autoincrement())
+  campaignId     Int   @map("campaign_id")
+  leadId         Int   @map("lead_id")
   lead           Lead     @relation(fields: [leadId], references: [id])
   amount         Decimal
   conversionDate DateTime @default(now()) @map("conversion_date")
@@ -153,12 +153,12 @@ model Conversion {
 }
 
 model Task {
-  id          String   @id @default(uuid())
-  campaignId  String   @map("campaign_id")
+  id          Int   @id @default(autoincrement())
+  campaignId  Int   @map("campaign_id")
   campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   title       String
   description String?
-  assignedTo  String?   @map("assigned_to")
+  assignedTo  Int?   @map("assigned_to")
   assignee    User?     @relation(fields: [assignedTo], references: [id], onDelete: NoAction, onUpdate: NoAction)
   dueDate     DateTime @map("due_date")
   status      String   // TODO, IN_PROGRESS, DONE
@@ -169,8 +169,8 @@ model Task {
 }
 
 model Expense {
-  id          String   @id @default(uuid())
-  campaignId  String   @map("campaign_id")
+  id          Int   @id @default(autoincrement())
+  campaignId  Int   @map("campaign_id")
   campaign    Campaign @relation(fields: [campaignId], references: [id])
   description String
   amount      Decimal
@@ -182,12 +182,12 @@ model Expense {
 }
 
 model Attachment {
-  id         String   @id @default(uuid())
+  id         Int   @id @default(autoincrement())
   fileName   String
   filePath   String
   entityType String   @map("entity_type") // CAMPAIGN, TASK, etc.
   entityId   String   @map("entity_id")
-  campaignId String?  @map("campaign_id") // Optional direct link for easier querying
+  campaignId Int?  @map("campaign_id") // Optional direct link for easier querying
   campaign   Campaign? @relation(fields: [campaignId], references: [id])
   uploadedAt DateTime @default(now())
 
@@ -195,8 +195,8 @@ model Attachment {
 }
 
 model CampaignKpiTarget {
-  id          String   @id @default(uuid())
-  campaignId  String   @map("campaign_id")
+  id          Int   @id @default(autoincrement())
+  campaignId  Int   @map("campaign_id")
   campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   kpiName     String   @map("kpi_name")
   targetValue Decimal  @map("target_value")
@@ -206,4 +206,21 @@ model CampaignKpiTarget {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   @@map("campaign_kpi_targets")
+}
+
+model RefreshSession {
+  id           Int   @id @default(autoincrement())
+  userId       Int
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash    String   @unique
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  revokedAt    DateTime?
+
+  userAgent    String?
+  ip           String?
+
+  @@index([userId])
+  @@index([expiresAt])
 }

@@ -23,14 +23,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     const checkAuth = async () => {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('accessToken');
       if (token) {
         try {
+          api.defaults.headers.common.Authorization = `Bearer ${token}`;
           const { data } = await api.get('/auth/me');
           setUser(data);
         } catch (error) {
-          localStorage.removeItem('token');
+          localStorage.removeItem('accessToken');
+          delete api.defaults.headers.common.Authorization;
+          setUser(null);
         }
+      }else{
+        setUser(null);
       }
       setIsLoading(false);
     };
@@ -38,12 +43,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const login = (token: string, user: User) => {
-    localStorage.setItem('token', token);
+    localStorage.setItem('accessToken', token);
+    api.defaults.headers.common.Authorization = `Bearer ${token}`; // ✅
     setUser(user);
   };
 
   const logout = () => {
-    localStorage.removeItem('token');
+    localStorage.removeItem('accessToken');
+    delete api.defaults.headers.common.Authorization;
     setUser(null);
   };
 

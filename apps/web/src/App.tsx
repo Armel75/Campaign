@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import Login from '@/pages/auth/Login';
 import DashboardLayout from '@/layouts/DashboardLayout';
@@ -18,7 +18,6 @@ const ProtectedRoute = () => {
 export default function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
           
@@ -195,7 +194,6 @@ export default function App() {
 
           </Route>
         </Routes>
-      </BrowserRouter>
     </AuthProvider>
   );
 }

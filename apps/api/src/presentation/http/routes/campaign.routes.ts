@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import prisma from '../../../infrastructure/prisma/client';
 import { requireAuth } from '../middlewares/auth';
+import { Request } from "express";
 
 const router = Router();
 
@@ -24,6 +25,8 @@ router.get('/', requireAuth, async (req, res, next) => {
 // Create
 router.post('/', requireAuth, async (req, res, next) => {
   try {
+    type AuthRequest = Request & { user: { userId: number } };
+    const r = req as AuthRequest;
     const { name, description, objectiveId, startDate, endDate, status } = req.body;
     const campaign = await prisma.campaign.create({
       data: {
@@ -33,7 +36,7 @@ router.post('/', requireAuth, async (req, res, next) => {
         startDate: new Date(startDate),
         endDate: new Date(endDate),
         status,
-        createdById: req.user!.userId,
+        createdById: r.user!.userId,
       },
     });
     res.status(201).json(campaign);
@@ -46,7 +49,7 @@ router.post('/', requireAuth, async (req, res, next) => {
 router.get('/:id', requireAuth, async (req, res, next) => {
   try {
     const campaign = await prisma.campaign.findUnique({
-      where: { id: req.params.id },
+      where: { id: Number(req.params.id) },
       include: {
         objective: true,
         channels: { include: { channel: true } },
@@ -68,7 +71,7 @@ router.put('/:id', requireAuth, async (req, res, next) => {
   try {
     const { name, description, objectiveId, startDate, endDate, status } = req.body;
     const campaign = await prisma.campaign.update({
-      where: { id: req.params.id },
+      where: { id: Number(req.params.id) },
       data: {
         name,
         description,
@@ -88,7 +91,7 @@ router.put('/:id', requireAuth, async (req, res, next) => {
 router.delete('/:id', requireAuth, async (req, res, next) => {
   try {
     await prisma.campaign.delete({
-      where: { id: req.params.id },
+      where: { id: Number(req.params.id) },
     });
     res.status(204).send();
   } catch (error) {

@@ -4,11 +4,11 @@ BEGIN TRAN;
 
 -- CreateTable
 CREATE TABLE [dbo].[users] (
-    [id] NVARCHAR(1000) NOT NULL,
+    [id] INT NOT NULL IDENTITY(1,1),
     [username] NVARCHAR(1000) NOT NULL,
     [email] NVARCHAR(1000) NOT NULL,
     [password_hash] NVARCHAR(1000) NOT NULL,
-    [role_id] NVARCHAR(1000) NOT NULL,
+    [role_id] INT NOT NULL,
     [created_at] DATETIME2 NOT NULL CONSTRAINT [users_created_at_df] DEFAULT CURRENT_TIMESTAMP,
     [updated_at] DATETIME2 NOT NULL,
     CONSTRAINT [users_pkey] PRIMARY KEY CLUSTERED ([id]),
@@ -18,7 +18,7 @@ CREATE TABLE [dbo].[users] (
 
 -- CreateTable
 CREATE TABLE [dbo].[roles] (
-    [id] NVARCHAR(1000) NOT NULL,
+    [id] INT NOT NULL IDENTITY(1,1),
     [name] NVARCHAR(1000) NOT NULL,
     [created_at] DATETIME2 NOT NULL CONSTRAINT [roles_created_at_df] DEFAULT CURRENT_TIMESTAMP,
     [updated_at] DATETIME2 NOT NULL,
@@ -28,14 +28,14 @@ CREATE TABLE [dbo].[roles] (
 
 -- CreateTable
 CREATE TABLE [dbo].[campaigns] (
-    [id] NVARCHAR(1000) NOT NULL,
+    [id] INT NOT NULL IDENTITY(1,1),
     [name] NVARCHAR(1000) NOT NULL,
     [description] NVARCHAR(1000),
-    [objective_id] NVARCHAR(1000) NOT NULL,
+    [objective_id] INT NOT NULL,
     [start_date] DATETIME2 NOT NULL,
     [end_date] DATETIME2 NOT NULL,
     [status] NVARCHAR(1000) NOT NULL,
-    [created_by] NVARCHAR(1000) NOT NULL,
+    [created_by] INT NOT NULL,
     [created_at] DATETIME2 NOT NULL CONSTRAINT [campaigns_created_at_df] DEFAULT CURRENT_TIMESTAMP,
     [updated_at] DATETIME2 NOT NULL,
     CONSTRAINT [campaigns_pkey] PRIMARY KEY CLUSTERED ([id])
@@ -43,7 +43,7 @@ CREATE TABLE [dbo].[campaigns] (
 
 -- CreateTable
 CREATE TABLE [dbo].[objectives] (
-    [id] NVARCHAR(1000) NOT NULL,
+    [id] INT NOT NULL IDENTITY(1,1),
     [code] NVARCHAR(1000) NOT NULL,
     [label] NVARCHAR(1000) NOT NULL,
     [description] NVARCHAR(1000),
@@ -56,7 +56,7 @@ CREATE TABLE [dbo].[objectives] (
 
 -- CreateTable
 CREATE TABLE [dbo].[target_audiences] (
-    [id] NVARCHAR(1000) NOT NULL,
+    [id] INT NOT NULL IDENTITY(1,1),
     [name] NVARCHAR(1000) NOT NULL,
     [description] NVARCHAR(1000),
     [created_at] DATETIME2 NOT NULL CONSTRAINT [target_audiences_created_at_df] DEFAULT CURRENT_TIMESTAMP,
@@ -66,7 +66,7 @@ CREATE TABLE [dbo].[target_audiences] (
 
 -- CreateTable
 CREATE TABLE [dbo].[channels] (
-    [id] NVARCHAR(1000) NOT NULL,
+    [id] INT NOT NULL IDENTITY(1,1),
     [name] NVARCHAR(1000) NOT NULL,
     [description] NVARCHAR(1000),
     [created_at] DATETIME2 NOT NULL CONSTRAINT [channels_created_at_df] DEFAULT CURRENT_TIMESTAMP,
@@ -76,9 +76,9 @@ CREATE TABLE [dbo].[channels] (
 
 -- CreateTable
 CREATE TABLE [dbo].[campaign_channels] (
-    [id] NVARCHAR(1000) NOT NULL,
-    [campaign_id] NVARCHAR(1000) NOT NULL,
-    [channel_id] NVARCHAR(1000) NOT NULL,
+    [id] INT NOT NULL IDENTITY(1,1),
+    [campaign_id] INT NOT NULL,
+    [channel_id] INT NOT NULL,
     [budget_allocated] DECIMAL(32,16) NOT NULL,
     [created_at] DATETIME2 NOT NULL CONSTRAINT [campaign_channels_created_at_df] DEFAULT CURRENT_TIMESTAMP,
     [updated_at] DATETIME2 NOT NULL,
@@ -87,8 +87,8 @@ CREATE TABLE [dbo].[campaign_channels] (
 
 -- CreateTable
 CREATE TABLE [dbo].[campaign_metrics] (
-    [id] NVARCHAR(1000) NOT NULL,
-    [campaign_id] NVARCHAR(1000) NOT NULL,
+    [id] INT NOT NULL IDENTITY(1,1),
+    [campaign_id] INT NOT NULL,
     [metric_name] NVARCHAR(1000) NOT NULL,
     [metric_value] DECIMAL(32,16) NOT NULL,
     [metric_date] DATETIME2 NOT NULL CONSTRAINT [campaign_metrics_metric_date_df] DEFAULT CURRENT_TIMESTAMP,
@@ -99,8 +99,8 @@ CREATE TABLE [dbo].[campaign_metrics] (
 
 -- CreateTable
 CREATE TABLE [dbo].[leads] (
-    [id] NVARCHAR(1000) NOT NULL,
-    [campaign_id] NVARCHAR(1000) NOT NULL,
+    [id] INT NOT NULL IDENTITY(1,1),
+    [campaign_id] INT NOT NULL,
     [name] NVARCHAR(1000) NOT NULL,
     [email] NVARCHAR(1000) NOT NULL,
     [phone] NVARCHAR(1000),
@@ -112,9 +112,9 @@ CREATE TABLE [dbo].[leads] (
 
 -- CreateTable
 CREATE TABLE [dbo].[conversions] (
-    [id] NVARCHAR(1000) NOT NULL,
-    [campaign_id] NVARCHAR(1000) NOT NULL,
-    [lead_id] NVARCHAR(1000) NOT NULL,
+    [id] INT NOT NULL IDENTITY(1,1),
+    [campaign_id] INT NOT NULL,
+    [lead_id] INT NOT NULL,
     [amount] DECIMAL(32,16) NOT NULL,
     [conversion_date] DATETIME2 NOT NULL CONSTRAINT [conversions_conversion_date_df] DEFAULT CURRENT_TIMESTAMP,
     [created_at] DATETIME2 NOT NULL CONSTRAINT [conversions_created_at_df] DEFAULT CURRENT_TIMESTAMP,
@@ -124,11 +124,11 @@ CREATE TABLE [dbo].[conversions] (
 
 -- CreateTable
 CREATE TABLE [dbo].[tasks] (
-    [id] NVARCHAR(1000) NOT NULL,
-    [campaign_id] NVARCHAR(1000) NOT NULL,
+    [id] INT NOT NULL IDENTITY(1,1),
+    [campaign_id] INT NOT NULL,
     [title] NVARCHAR(1000) NOT NULL,
     [description] NVARCHAR(1000),
-    [assigned_to] NVARCHAR(1000),
+    [assigned_to] INT,
     [due_date] DATETIME2 NOT NULL,
     [status] NVARCHAR(1000) NOT NULL,
     [created_at] DATETIME2 NOT NULL CONSTRAINT [tasks_created_at_df] DEFAULT CURRENT_TIMESTAMP,
@@ -138,8 +138,8 @@ CREATE TABLE [dbo].[tasks] (
 
 -- CreateTable
 CREATE TABLE [dbo].[expenses] (
-    [id] NVARCHAR(1000) NOT NULL,
-    [campaign_id] NVARCHAR(1000) NOT NULL,
+    [id] INT NOT NULL IDENTITY(1,1),
+    [campaign_id] INT NOT NULL,
     [description] NVARCHAR(1000) NOT NULL,
     [amount] DECIMAL(32,16) NOT NULL,
     [expense_date] DATETIME2 NOT NULL,
@@ -150,20 +150,20 @@ CREATE TABLE [dbo].[expenses] (
 
 -- CreateTable
 CREATE TABLE [dbo].[attachments] (
-    [id] NVARCHAR(1000) NOT NULL,
+    [id] INT NOT NULL IDENTITY(1,1),
     [fileName] NVARCHAR(1000) NOT NULL,
     [filePath] NVARCHAR(1000) NOT NULL,
     [entity_type] NVARCHAR(1000) NOT NULL,
     [entity_id] NVARCHAR(1000) NOT NULL,
-    [campaign_id] NVARCHAR(1000),
+    [campaign_id] INT,
     [uploadedAt] DATETIME2 NOT NULL CONSTRAINT [attachments_uploadedAt_df] DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT [attachments_pkey] PRIMARY KEY CLUSTERED ([id])
 );
 
 -- CreateTable
 CREATE TABLE [dbo].[campaign_kpi_targets] (
-    [id] NVARCHAR(1000) NOT NULL,
-    [campaign_id] NVARCHAR(1000) NOT NULL,
+    [id] INT NOT NULL IDENTITY(1,1),
+    [campaign_id] INT NOT NULL,
     [kpi_name] NVARCHAR(1000) NOT NULL,
     [target_value] DECIMAL(32,16) NOT NULL,
     [period_start] DATETIME2 NOT NULL,

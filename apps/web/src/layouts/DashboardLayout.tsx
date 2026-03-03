@@ -40,7 +40,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       {/* Sidebar */}
       <aside className="w-64 border-r bg-card hidden md:flex flex-col">
         <div className="p-6 border-b">
-          <h1 className="text-xl font-bold">CampaignMgr</h1>
+          <h1 className="text-xl font-bold">Campagne</h1>
         </div>
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
           <SidebarItem icon={LayoutDashboard} label="Dashboard" to="/" />
