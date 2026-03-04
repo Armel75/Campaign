@@ -1,12 +1,12 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '@/lib/auth';
 import { cn } from '@/lib/utils';
-import { 
-  LayoutDashboard, 
-  Megaphone, 
-  Target, 
-  Users, 
-  Settings, 
+import {
+  LayoutDashboard,
+  Megaphone,
+  Target,
+  Users,
+  Settings,
   LogOut,
   BarChart3,
   ListTodo,
@@ -18,11 +18,11 @@ import { Button } from '@/components/ui/button';
 const SidebarItem = ({ icon: Icon, label, to }: { icon: any, label: string, to: string }) => {
   const location = useLocation();
   const isActive = location.pathname.startsWith(to);
-  
+
   return (
     <Link to={to}>
-      <Button 
-        variant={isActive ? "secondary" : "ghost"} 
+      <Button
+        variant={isActive ? "secondary" : "ghost"}
         className={cn("w-full justify-start", isActive && "bg-secondary")}
       >
         <Icon className="mr-2 h-4 w-4" />
@@ -43,15 +43,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <h1 className="text-xl font-bold">Campagne</h1>
         </div>
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          <SidebarItem icon={LayoutDashboard} label="Dashboard" to="/" />
-          <SidebarItem icon={Megaphone} label="Campaigns" to="/campaigns" />
+          <SidebarItem icon={LayoutDashboard} label="Tableau de Bord" to="/" />
+          <SidebarItem icon={Megaphone} label="Campagnes" to="/campaigns" />
           <SidebarItem icon={Target} label="Objectives" to="/objectives" />
           <SidebarItem icon={Share2} label="Channels" to="/channels" />
           <SidebarItem icon={Users} label="Audiences" to="/target-audiences" />
-          <SidebarItem icon={ListTodo} label="Tasks" to="/tasks" />
+          <SidebarItem icon={ListTodo} label="Tâches" to="/tasks" />
           <SidebarItem icon={BarChart3} label="Leads" to="/leads" />
           <SidebarItem icon={DollarSign} label="Expenses" to="/expenses" />
-          
+
           {user?.role === 'ADMIN' && (
             <>
               <div className="pt-4 pb-2">
