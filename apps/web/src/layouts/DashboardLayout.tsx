@@ -98,9 +98,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </div>
             <ModeToggle />
           </div>
-          <Button variant="outline" className="w-full justify-start text-muted-foreground hover:text-foreground" onClick={logout}>
+          <Button variant="destructive" className="w-full justify-start" onClick={logout}>
             <LogOut className="mr-2 h-4 w-4" />
-            Logout
+            Déconnexion
           </Button>
         </div>
       </aside>
