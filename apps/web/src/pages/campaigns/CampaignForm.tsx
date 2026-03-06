@@ -40,10 +40,11 @@ export default function CampaignForm() {
     try {
       if (isEdit) {
         await api.put(`/campaigns/${id}`, data);
+        navigate(`/campaigns/${id}`);
       } else {
-        await api.post('/campaigns', data);
+        const res = await api.post('/campaigns', data);
+        navigate(`/campaigns/${res.data.id}`);
       }
-      navigate('/campaigns');
     } catch (error) {
       console.error(error);
     }

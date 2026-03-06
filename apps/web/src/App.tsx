@@ -6,6 +6,7 @@ import DashboardLayout from '@/layouts/DashboardLayout';
 import Dashboard from '@/pages/dashboard/Dashboard';
 import CampaignList from '@/pages/campaigns/CampaignList';
 import CampaignForm from '@/pages/campaigns/CampaignForm';
+import CampaignDetails from '@/pages/campaigns/CampaignDetails';
 import UserList from '@/pages/users/UserList';
 import UserForm from '@/pages/users/UserForm';
 import GenericTable from '@/components/GenericTable';
@@ -32,7 +33,8 @@ export default function App() {
               {/* Campaigns */}
               <Route path="/campaigns" element={<CampaignList />} />
               <Route path="/campaigns/new" element={<CampaignForm />} />
-              <Route path="/campaigns/:id" element={<CampaignForm />} />
+              <Route path="/campaigns/:id" element={<CampaignDetails />} />
+              <Route path="/campaigns/:id/edit" element={<CampaignForm />} />
 
               {/* Objectives */}
               <Route path="/objectives" element={

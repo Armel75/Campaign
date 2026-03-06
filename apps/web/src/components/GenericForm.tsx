@@ -22,7 +22,7 @@ interface GenericFormProps {
 }
 
 export default function GenericForm({ title, endpoint, fields, redirectPath }: GenericFormProps) {
-  const { register, handleSubmit, reset, setValue } = useForm();
+  const { register, handleSubmit, setValue } = useForm();
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const { id } = useParams();

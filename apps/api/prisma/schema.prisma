@@ -60,6 +60,7 @@ model Campaign {
   expenses    Expense[]
   attachments Attachment[]
   kpiTargets  CampaignKpiTarget[]
+  articles    CampaignArticle[]
 
   @@map("campaigns")
 }
@@ -206,4 +207,18 @@ model CampaignKpiTarget {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   @@map("campaign_kpi_targets")
+}
+
+model CampaignArticle {
+  id          String   @id @default(uuid())
+  campaignId  String   @map("campaign_id")
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  articleCode String   @map("article_code")
+  designation String
+  quantity    Int
+  source      String   // SAGE_X3, SAGE_100
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("campaign_articles")
 }
