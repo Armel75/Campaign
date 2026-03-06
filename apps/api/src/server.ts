@@ -7,7 +7,10 @@ import { errorHandler } from './presentation/http/middlewares/errorHandler';
 import "dotenv/config";
 import { bootstrapAdmin } from "./bootstrap/adminBootstrap";
 import cookieParser from 'cookie-parser';
+import { PrismaClient } from '@prisma/client';
+import path from 'path';
 
+const prisma = new PrismaClient();
 const app = express();
 
 const PORT = process.env.PORT || 3004;
@@ -15,6 +18,11 @@ const PORT = process.env.PORT || 3004;
 app.use(helmet());
 app.use(morgan('dev'));
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(
+  '/uploads',
+  express.static(path.resolve(__dirname, '../uploads'))
+);
 app.use(cookieParser());
 
 const WEB_ORIGINS = (process.env.WEB_ORIGIN ?? "http://localhost:5173")
@@ -43,12 +51,44 @@ app.get('/health', (req, res) => {
 
 app.use(errorHandler);
 
-console.log("BOOTSTRAP_ENABLED =", process.env.BOOTSTRAP_ENABLED);
-console.log("BOOTSTRAP_ADMIN_USERNAME =", process.env.BOOTSTRAP_ADMIN_USERNAME);
+// console.log("BOOTSTRAP_ENABLED =", process.env.BOOTSTRAP_ENABLED);
+// console.log("BOOTSTRAP_ADMIN_USERNAME =", process.env.BOOTSTRAP_ADMIN_USERNAME);
+
+// async function start() {
+//   await bootstrapAdmin();
+//   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+// }
+
+// start();
+async function ensureSuperAdminRole() {
+
+  if (process.env.BOOTSTRAP_ENABLED !== "true") return;
+
+  const roleName = process.env.BOOTSTRAP_ADMIN_ROLE || "SUPER_ADMIN";
+
+  const role = await prisma.role.findUnique({
+    where: { name: roleName }
+  });
+
+  if (!role) {
+    await prisma.role.create({
+      data: {
+        name: roleName
+      }
+    });
+
+    console.log(`Role ${roleName} created`);
+  }
+}
 
 async function start() {
-  await bootstrapAdmin();
-  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+  await ensureSuperAdminRole();   // création du rôle
+  await bootstrapAdmin();         // création de l'utilisateur admin
+
+  app.listen(PORT, () =>
+    console.log(`Server running on port ${PORT}`)
+  );
 }
 
 start();

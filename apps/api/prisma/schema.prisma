@@ -37,32 +37,76 @@ model Role {
   @@map("roles")
 }
 
-model Campaign {
-  id          Int    @id @default(autoincrement())
+model BudgetPlan {
+  id          Int         @id @default(autoincrement())
   name        String
   description String?
-  objectiveId Int    @map("objective_id")
-  objective   Objective @relation(fields: [objectiveId], references: [id])
-  startDate   DateTime  @map("start_date")
-  endDate     DateTime  @map("end_date")
-  status      String    // DRAFT, ACTIVE, PAUSED, COMPLETED
-  
-  createdById Int    @map("created_by")
-  createdBy   User      @relation(fields: [createdById], references: [id])
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
+  status      String      @default("DRAFT") // DRAFT | APPROVED | ARCHIVED (exemple)
+  currency    String      @default("XAF")
+
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
 
   // Relations
-  channels    CampaignChannel[]
-  metrics     CampaignMetric[]
-  leads       Lead[]
-  tasks       Task[]
-  expenses    Expense[]
-  attachments Attachment[]
-  kpiTargets  CampaignKpiTarget[]
+  budgetLines BudgetLine[]
+  campaigns   Campaign[]
 
+  @@map("budget_plans")
+}
+
+
+model BudgetLine {
+  id            Int       @id @default(autoincrement())
+  budgetPlanId  Int       @map("budget_plan_id")
+
+  label         String
+  plannedAmount Decimal   @db.Decimal(18, 2) @map("planned_amount")
+
+  notes         String?
+  order         Int       @default(0)
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  budgetPlan    BudgetPlan @relation(fields: [budgetPlanId], references: [id], onDelete: Cascade)
+  expenses      Expense[]  // ✅ 1 BudgetLine -> N Expense
+  
+  @@index([budgetPlanId])
+  @@map("budget_lines")
+}
+
+
+model Campaign {
+  id            Int       @id @default(autoincrement())
+  name          String
+  description   String?
+  objectiveId   Int       @map("objective_id")
+  startDate     DateTime  @map("start_date")
+  endDate       DateTime  @map("end_date")
+  status        String
+  budgetPlanId  Int?      @map("budget_plan_id")
+  createdById   Int       @map("created_by")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  objective       Objective            @relation(fields: [objectiveId], references: [id])
+  budgetPlan      BudgetPlan?          @relation(fields: [budgetPlanId], references: [id], onDelete: SetNull)
+  createdBy       User                 @relation(fields: [createdById], references: [id])
+
+  channels        CampaignChannel[]
+  targetAudiences CampaignTargetAudience[]
+  metrics         CampaignMetric[]
+  leads           Lead[]
+  tasks           Task[]
+  attachments     Attachment[]
+  kpiTargets      CampaignKpiTarget[]
+  conversions Conversion[]
+
+  @@index([budgetPlanId])
   @@map("campaigns")
 }
+
 
 model Objective {
   id          Int     @id @default(autoincrement())
@@ -78,38 +122,45 @@ model Objective {
 }
 
 model TargetAudience {
-  id          Int   @id @default(autoincrement())
+  id          Int      @id @default(autoincrement())
   name        String
   description String?
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
+  campaigns CampaignTargetAudience[]
+
   @@map("target_audiences")
 }
 
+
 model Channel {
-  id               Int            @id @default(autoincrement())
-  name             String
-  description      String?
-  campaignChannels CampaignChannel[]
-  createdAt        DateTime          @default(now()) @map("created_at")
-  updatedAt        DateTime          @updatedAt @map("updated_at")
+  id          Int      @id @default(autoincrement())
+  name        String
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  campaigns CampaignChannel[]
 
   @@map("channels")
 }
 
+
 model CampaignChannel {
-  id              Int   @id @default(autoincrement())
-  campaignId      Int   @map("campaign_id")
-  campaign        Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  channelId       Int  @map("channel_id")
-  channel         Channel  @relation(fields: [channelId], references: [id])
-  budgetAllocated Decimal  @map("budget_allocated")
+  id              Int      @id @default(autoincrement())
+  campaignId      Int      @map("campaign_id")
+  channelId       Int      @map("channel_id")
+  budgetAllocated Decimal  @db.Decimal(32, 16) @map("budget_allocated")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  channel  Channel  @relation(fields: [channelId], references: [id])
+
   @@map("campaign_channels")
 }
+
 
 model CampaignMetric {
   id          Int   @id @default(autoincrement())
@@ -140,14 +191,16 @@ model Lead {
 }
 
 model Conversion {
-  id             Int   @id @default(autoincrement())
-  campaignId     Int   @map("campaign_id")
-  leadId         Int   @map("lead_id")
-  lead           Lead     @relation(fields: [leadId], references: [id])
+  id             Int      @id @default(autoincrement())
+  campaignId     Int      @map("campaign_id")
+  leadId         Int      @map("lead_id")
   amount         Decimal
   conversionDate DateTime @default(now()) @map("conversion_date")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  lead     Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   @@map("conversions")
 }
@@ -170,29 +223,35 @@ model Task {
 
 model Expense {
   id          Int   @id @default(autoincrement())
-  campaignId  Int   @map("campaign_id")
-  campaign    Campaign @relation(fields: [campaignId], references: [id])
+  budgetLineId Int       @map("budget_line_id")
   description String
   amount      Decimal
   expenseDate DateTime @map("expense_date")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
+// Relations
+  budgetLine   BudgetLine @relation(fields: [budgetLineId], references: [id], onDelete: Cascade)
+
+  @@index([budgetLineId])
   @@map("expenses")
 }
 
+
 model Attachment {
-  id         Int   @id @default(autoincrement())
+  id         Int      @id @default(autoincrement())
   fileName   String
   filePath   String
-  entityType String   @map("entity_type") // CAMPAIGN, TASK, etc.
+  entityType String   @map("entity_type")
   entityId   String   @map("entity_id")
-  campaignId Int?  @map("campaign_id") // Optional direct link for easier querying
-  campaign   Campaign? @relation(fields: [campaignId], references: [id])
-  uploadedAt DateTime @default(now())
+  campaignId Int?     @map("campaign_id")
+  uploadedAt DateTime @default(now()) @map("uploadedAt")
+
+  campaign Campaign? @relation(fields: [campaignId], references: [id])
 
   @@map("attachments")
 }
+
 
 model CampaignKpiTarget {
   id          Int   @id @default(autoincrement())
@@ -223,4 +282,17 @@ model RefreshSession {
 
   @@index([userId])
   @@index([expiresAt])
+}
+
+model CampaignTargetAudience {
+  id               Int      @id @default(autoincrement())
+  campaignId       Int      @map("campaign_id")
+  targetAudienceId Int      @map("target_audience_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  campaign       Campaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  targetAudience TargetAudience @relation(fields: [targetAudienceId], references: [id], onDelete: Cascade)
+
+  @@map("campaign_target_audiences")
 }
