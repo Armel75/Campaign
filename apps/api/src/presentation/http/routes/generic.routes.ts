@@ -35,13 +35,18 @@ export default (modelName: string) => {
     }
   });
 
-  router.post('/', requireAuth, async (req, res, next) => {
+  router.post('/', requireAuth, async (req: any, res, next) => {
     try {
-      // Basic audit fields if they exist in schema but not in body
       const data = { ...req.body };
-      // If model has createdById and it's missing, add it
-      // Note: This is a simplification. Real generic CRUD needs metadata about fields.
-      
+
+      // Ajout automatique de createdById pour les modèles qui en ont besoin
+      if (
+        ['objective', 'channel', 'targetAudience', 'task', 'lead', 'expense'].includes(modelName) &&
+        !data.createdById
+      ) {
+        data.createdById = req.user.userId;
+      }
+
       const item = await model.create({
         data,
       });

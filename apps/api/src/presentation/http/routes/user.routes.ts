@@ -21,7 +21,8 @@ const updateUserSchema = z.object({
 });
 
 // List Users
-router.get('/', requireAuth, requireRole(['ADMIN']), async (req, res, next) => {
+//router.get('/', requireAuth, requireRole(['ADMIN']), async (req, res, next) => {
+router.get('/', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN', 'MANAGER']), async (req, res, next) => {
   try {
     const users = await prisma.user.findMany({
       select: {

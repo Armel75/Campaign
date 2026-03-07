@@ -10,6 +10,7 @@ import GenericForm from '@/components/GenericForm';
 import { ThemeProvider } from '@/components/theme-provider';
 import UserList from '@/pages/users/UserList';
 import UserForm from '@/pages/users/UserForm';
+import CampaignDetails from '@/pages/campaigns/CampaignDetails';
 
 const ProtectedRoute = () => {
   const { user, isLoading } = useAuth();
@@ -31,7 +32,8 @@ export default function App() {
               {/* Campaigns */}
               <Route path="/campaigns" element={<CampaignList />} />
               <Route path="/campaigns/new" element={<CampaignForm />} />
-              <Route path="/campaigns/:id" element={<CampaignForm />} />
+              <Route path="/campaigns/:id" element={<CampaignDetails />} />
+              <Route path="/campaigns/:id/edit" element={<CampaignForm />} />
 
               {/* Objectives */}
               <Route path="/objectives" element={
@@ -184,13 +186,13 @@ export default function App() {
               <Route path="/users" element={<UserList />} />
               <Route path="/users/new" element={<UserForm />} />
               <Route path="/users/:id" element={<UserForm />} />
-              {/* <Route path="/users" element={
+              <Route path="/users" element={
                 <GenericTable 
                   title="Users" 
                   endpoint="/users" 
                   columns={[{ key: 'username', label: 'Username' }, { key: 'email', label: 'Email' }]}
                 />
-              } /> */}
+              } />
               <Route path="/roles" element={
                 <GenericTable 
                   title="Roles" 

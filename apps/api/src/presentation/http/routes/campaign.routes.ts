@@ -1,9 +1,11 @@
-import { Router, Request } from 'express';
+import { Router, Request, NextFunction } from 'express';
 import prisma from '../../../infrastructure/prisma/client';
 import { requireAuth } from '../middlewares/auth';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import { searchArticlesInCatalog, testArticleCatalogConnection } from '../../../services/articleCatalog.service';
+
 
 const router = Router();
 
@@ -70,12 +72,47 @@ function removePhysicalFiles(filePaths: string[]) {
 }
 
 // List
+// router.get('/', requireAuth, async (_req, res, next) => {
+//   try {
+//     const campaigns = await prisma.campaign.findMany({
+//       include: {
+//         objective: true,
+//         createdBy: { select: { username: true } },
+//         channels: {
+//           include: {
+//             channel: true,
+//           },
+//         },
+//         targetAudiences: {
+//           include: {
+//             targetAudience: true,
+//           },
+//         },
+//         attachments: true,
+//         _count: { select: { leads: true, tasks: true } },
+//       },
+//       orderBy: { updatedAt: 'desc' },
+//     });
+
+//     res.json({ data: campaigns });
+//   } catch (error) {
+//     next(error);
+//   }
+// });
+
+// List
 router.get('/', requireAuth, async (_req, res, next) => {
   try {
     const campaigns = await prisma.campaign.findMany({
       include: {
         objective: true,
-        createdBy: { select: { username: true } },
+        createdBy: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+          },
+        },
         channels: {
           include: {
             channel: true,
@@ -87,7 +124,14 @@ router.get('/', requireAuth, async (_req, res, next) => {
           },
         },
         attachments: true,
-        _count: { select: { leads: true, tasks: true } },
+        _count: {
+          select: {
+            leads: true,
+            tasks: true,
+            attachments: true,
+            articles: true,
+          },
+        },
       },
       orderBy: { updatedAt: 'desc' },
     });
@@ -122,6 +166,10 @@ router.post('/', requireAuth, upload.array('attachments'), async (req, res, next
       }))
     );
 
+    if (!r.user?.userId) {
+      return res.status(401).json({ message: 'Utilisateur non authentifié' });
+    }
+
     const campaign = await prisma.campaign.create({
       data: {
         name,
@@ -130,7 +178,7 @@ router.post('/', requireAuth, upload.array('attachments'), async (req, res, next
         startDate: toValidDate(startDate),
         endDate: toValidDate(endDate),
         status,
-        createdById: r.user.userId,
+        createdById: Number(r.user.userId),
 
         channels: {
           create: channelIds.map((channelId) => ({
@@ -155,6 +203,7 @@ router.post('/', requireAuth, upload.array('attachments'), async (req, res, next
           entityType: 'campaign',
           entityId: String(campaign.id),
           campaignId: campaign.id,
+          createdById: Number(r.user.userId),
         })),
       });
     }
@@ -163,10 +212,34 @@ router.post('/', requireAuth, upload.array('attachments'), async (req, res, next
       where: { id: campaign.id },
       include: {
         objective: true,
-        createdBy: { select: { username: true } },
-        channels: { include: { channel: true } },
-        targetAudiences: { include: { targetAudience: true } },
-        attachments: true,
+        createdBy: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+          },
+        },
+        channels: {
+          include: {
+            channel: true,
+          },
+        },
+        targetAudiences: {
+          include: {
+            targetAudience: true,
+          },
+        },
+        attachments: {
+          include: {
+            createdBy: {
+              select: {
+                id: true,
+                username: true,
+                email: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -177,6 +250,36 @@ router.post('/', requireAuth, upload.array('attachments'), async (req, res, next
 });
 
 // Get One
+// router.get('/:id', requireAuth, async (req, res, next) => {
+//   try {
+//     const campaignId = toValidNumber(req.params.id, 'campaignId');
+
+//     const campaign = await prisma.campaign.findUnique({
+//       where: { id: campaignId },
+//       include: {
+//         objective: true,
+//         createdBy: { select: { username: true } },
+//         channels: { include: { channel: true } },
+//         targetAudiences: { include: { targetAudience: true } },
+//         attachments: true,
+//         metrics: true,
+//         kpiTargets: true,
+//         tasks: true,
+//         leads: { take: 5, orderBy: { createdAt: 'desc' } },
+//       },
+//     });
+
+//     if (!campaign) {
+//       return res.status(404).json({ message: 'Not found' });
+//     }
+
+//     res.json({ data: campaign });
+//   } catch (error) {
+//     next(error);
+//   }
+// });
+
+// Get One
 router.get('/:id', requireAuth, async (req, res, next) => {
   try {
     const campaignId = toValidNumber(req.params.id, 'campaignId');
@@ -185,14 +288,47 @@ router.get('/:id', requireAuth, async (req, res, next) => {
       where: { id: campaignId },
       include: {
         objective: true,
-        createdBy: { select: { username: true } },
+        createdBy: { select: { id: true, username: true, email: true } },
         channels: { include: { channel: true } },
         targetAudiences: { include: { targetAudience: true } },
         attachments: true,
         metrics: true,
         kpiTargets: true,
-        tasks: true,
+        tasks: {
+          include: {
+            assignee: {
+              select: {
+                id: true,
+                username: true,
+                email: true,
+              },
+            },
+            createdBy: {
+              select: {
+                id: true,
+                username: true,
+                email: true,
+              },
+            },
+          },
+          orderBy: {
+            createdAt: 'desc',
+          },
+        },
+        articles: {
+          orderBy: {
+            createdAt: 'desc',
+          },
+        },
         leads: { take: 5, orderBy: { createdAt: 'desc' } },
+        _count: {
+          select: {
+            leads: true,
+            tasks: true,
+            attachments: true,
+            articles: true,
+          },
+        },
       },
     });
 
@@ -315,5 +451,713 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
     next(error);
   }
 });
+
+
+// --- Sub-resources ---
+
+// Add Task
+// router.post('/:id/tasks', requireAuth, async (req, res, next) => {
+//   try {
+//     const { title, description, assignedTo, dueDate, status } = req.body;
+//     const task = await prisma.task.create({
+//       data: {
+//         campaignId: req.params.id,
+//         title,
+//         description,
+//         assignedTo,
+//         dueDate: new Date(dueDate),
+//         status,
+//       },
+//     });
+//     res.status(201).json(task);
+//   } catch (error) {
+//     next(error);
+//   }
+// });
+
+// Add Task
+// router.post('/:id/tasks', requireAuth, async (req, res, next) => {
+//   try {
+//     const r = req as AuthRequest;
+
+//     const campaignId = toValidNumber(req.params.id, 'campaignId');
+//     const { title, description, assignedTo, dueDate, status } = req.body;
+
+//     if (!title || !String(title).trim()) {
+//       return res.status(400).json({ message: 'Title is required' });
+//     }
+
+//     const assignedToId = toValidNumber(assignedTo, 'assignedTo');
+
+//     const task = await prisma.task.create({
+//       data: {
+//         campaignId,
+//         createdById: r.user.userId,
+//         title: String(title).trim(),
+//         description: description ? String(description).trim() : null,
+//         assignedTo: assignedToId,
+//         dueDate: toValidDate(dueDate),
+//         status: status || 'TODO',
+//       },
+//       include: {
+//         assignee: {
+//           select: {
+//             id: true,
+//             username: true,
+//             email: true,
+//           },
+//         },
+//         createdBy: {
+//           select: {
+//             id: true,
+//             username: true,
+//             email: true,
+//           },
+//         },
+//       },
+//     });
+
+//     res.status(201).json(task);
+//   } catch (error) {
+//     next(error);
+//   }
+// });
+
+// Add Task
+router.post('/:id/tasks', requireAuth, async (req, res, next) => {
+  try {
+    const r = req as AuthRequest;
+
+    if (!r.user?.userId) {
+      return res.status(401).json({ message: 'Utilisateur non authentifié' });
+    }
+
+    const campaignId = toValidNumber(req.params.id, 'campaignId');
+    const { title, description, assignedTo, dueDate, status } = req.body;
+
+    if (!title || !String(title).trim()) {
+      return res.status(400).json({ message: 'Title is required' });
+    }
+
+    const assignedToId = assignedTo ? toValidNumber(assignedTo, 'assignedTo') : null;
+    const currentUserId = Number(r.user.userId);
+
+    const task = await prisma.task.create({
+      data: {
+        title: String(title).trim(),
+        description: description ? String(description).trim() : null,
+        dueDate: toValidDate(dueDate),
+        status: status || 'TODO',
+        campaign: {
+          connect: { id: campaignId },
+        },
+        createdBy: {
+          connect: { id: currentUserId },
+        },
+        ...(assignedToId
+          ? {
+              assignee: {
+                connect: { id: assignedToId },
+              },
+            }
+          : {}),
+      },
+      include: {
+        assignee: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+          },
+        },
+        createdBy: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    res.status(201).json(task);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Update Task
+router.put('/:id/tasks/:taskId', requireAuth, async (req, res, next) => {
+  try {
+    const taskId = toValidNumber(req.params.taskId, 'taskId');
+    const { title, description, assignedTo, dueDate, status } = req.body;
+
+    const data: any = {
+      title: title ? String(title).trim() : undefined,
+      description: description !== undefined ? (description ? String(description).trim() : null) : undefined,
+      status: status || undefined,
+    };
+
+    if (assignedTo !== undefined && assignedTo !== null && assignedTo !== '') {
+      data.assignedTo = toValidNumber(assignedTo, 'assignedTo');
+    }
+
+    if (dueDate) {
+      data.dueDate = toValidDate(dueDate);
+    }
+
+    const task = await prisma.task.update({
+      where: { id: taskId },
+      data,
+      include: {
+        assignee: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+          },
+        },
+        createdBy: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    res.json(task);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Delete Task
+router.delete('/:id/tasks/:taskId', requireAuth, async (req, res, next) => {
+  try {
+    const taskId = toValidNumber(req.params.taskId, 'taskId');
+
+    await prisma.task.delete({
+      where: { id: taskId },
+    });
+
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+});
+
+
+// Add Attachment
+router.post('/:id/attachments', requireAuth, async (req, res, next) => {
+  try {
+    const r = req as AuthRequest;
+    const campaignId = toValidNumber(req.params.id, 'campaignId');
+    const { fileName, filePath, entityType } = req.body;
+
+    const attachment = await prisma.attachment.create({
+      data: {
+        campaignId,
+        fileName,
+        filePath,
+        entityType: entityType || 'CAMPAIGN',
+        entityId: String(campaignId),
+        createdById: Number(r.user.userId),
+      },
+      include: {
+        createdBy: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    res.status(201).json(attachment);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Delete Attachment
+router.delete('/:id/attachments/:attachmentId', requireAuth, async (req, res, next) => {
+  try {
+    await prisma.attachment.delete({
+      where: { id: req.params.attachmentId },
+    });
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+});
+
+////////////////////////////////
+
+/**
+ * Test connexion catalogue
+ */
+router.get('/articles/test-catalog-connection', requireAuth, async (req, res, next) => {
+  try {
+    const ok = await testArticleCatalogConnection();
+
+    if (!ok) {
+      return res.status(500).json({
+        message: 'Connexion à la base catalogue impossible',
+      });
+    }
+
+    res.json({
+      message: 'Connexion à la base catalogue réussie',
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Recherche d’articles dans le catalogue externe
+ */
+router.post('/articles/search-catalog', requireAuth, async (req, res, next) => {
+  try {
+    const { codes, source } = req.body as {
+      codes: string[];
+      source: 'SAGE_X3' | 'SAGE_100';
+    };
+
+    if (!Array.isArray(codes) || codes.length === 0) {
+      return res.status(400).json({ message: 'codes is required' });
+    }
+
+    if (!source || !['SAGE_X3', 'SAGE_100'].includes(source)) {
+      return res.status(400).json({ message: 'source is invalid' });
+    }
+
+    const results = await searchArticlesInCatalog(codes, source);
+
+    res.json({
+      data: results,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Enregistrer plusieurs articles dans la campagne
+ */
+// router.post('/:id/articles/bulk', requireAuth, async (req, res, next) => {
+//   try {
+//     const campaignId = Number(req.params.id);
+
+//     if (Number.isNaN(campaignId)) {
+//       return res.status(400).json({ message: 'Invalid campaign id' });
+//     }
+
+//     const payload = req.body?.articles;
+
+//     if (!Array.isArray(payload) || payload.length === 0) {
+//       return res.status(400).json({ message: 'articles is required' });
+//     }
+
+//     const existingArticles = await prisma.article.findMany({
+//       where: { campaignId },
+//       select: {
+//         codeSageX3: true,
+//         codeSage100: true,
+//       },
+//     });
+
+//     const existingX3 = new Set(
+//       existingArticles.map((a) => a.codeSageX3).filter(Boolean)
+//     );
+
+//     const existing100 = new Set(
+//       existingArticles.map((a) => a.codeSage100).filter(Boolean)
+//     );
+
+//     const articlesToCreate = payload.filter((item: any) => {
+//       const x3 = item.codeSageX3 ? String(item.codeSageX3).trim() : null;
+//       const s100 = item.codeSage100 ? String(item.codeSage100).trim() : null;
+
+//       if (x3 && existingX3.has(x3)) return false;
+//       if (s100 && existing100.has(s100)) return false;
+
+//       if (x3) existingX3.add(x3);
+//       if (s100) existing100.add(s100);
+
+//       return true;
+//     });
+
+//     if (articlesToCreate.length === 0) {
+//       return res.status(200).json({
+//         message: 'Aucun nouvel article à enregistrer',
+//         count: 0,
+//       });
+//     }
+
+//     await prisma.article.createMany({
+//       data: articlesToCreate.map((item: any) => ({
+//         campaignId,
+//         codeSageX3: item.codeSageX3 || null,
+//         codeSage100: item.codeSage100 || null,
+//         designation: item.designation || '',
+//         plannedQuantity: item.plannedQuantity ?? null,
+//         quantityAtCreation: item.quantityAtCreation ?? 0,
+//         quantityAtStart: item.quantityAtStart ?? null,
+//         currentQuantity: item.currentQuantity ?? 0,
+//         quantityAtClosure: item.quantityAtClosure ?? null,
+//       })),
+//     });
+
+//     res.status(201).json({
+//       message: 'Articles enregistrés avec succès',
+//       count: articlesToCreate.length,
+//     });
+//   } catch (error) {
+//     next(error);
+//   }
+// });
+
+
+/**
+ * Enregistrer plusieurs articles dans la campagne
+ */
+// router.post('/:id/articles/bulk', requireAuth, async (req, res, next) => {
+//   try {
+//     const rawCampaignId = req.params.id;
+//     const campaignId = Number(rawCampaignId);
+
+//     console.log('=== BULK ARTICLES START ===');
+//     console.log('rawCampaignId:', rawCampaignId);
+//     console.log('campaignId:', campaignId);
+//     console.log('req.body:', JSON.stringify(req.body, null, 2));
+
+//     if (!rawCampaignId || Number.isNaN(campaignId)) {
+//       return res.status(400).json({
+//         message: 'Identifiant de campagne invalide',
+//       });
+//     }
+
+//     const campaign = await prisma.campaign.findUnique({
+//       where: { id: campaignId },
+//       select: { id: true, name: true },
+//     });
+
+//     if (!campaign) {
+//       return res.status(404).json({
+//         message: 'Campagne introuvable',
+//       });
+//     }
+
+//     const payload = req.body?.articles;
+
+//     if (!Array.isArray(payload) || payload.length === 0) {
+//       return res.status(400).json({
+//         message: 'Aucun article à enregistrer',
+//       });
+//     }
+
+//     const normalizedPayload = payload
+//       .map((item: any) => ({
+//         codeSageX3: item?.codeSageX3 ? String(item.codeSageX3).trim() : null,
+//         codeSage100: item?.codeSage100 ? String(item.codeSage100).trim() : null,
+//         designation: item?.designation ? String(item.designation).trim() : '',
+//         plannedQuantity:
+//           item?.plannedQuantity !== undefined && item?.plannedQuantity !== null
+//             ? Number(item.plannedQuantity)
+//             : null,
+//         quantityAtCreation:
+//           item?.quantityAtCreation !== undefined && item?.quantityAtCreation !== null
+//             ? Number(item.quantityAtCreation)
+//             : 0,
+//         quantityAtStart:
+//           item?.quantityAtStart !== undefined && item?.quantityAtStart !== null
+//             ? Number(item.quantityAtStart)
+//             : null,
+//         currentQuantity:
+//           item?.currentQuantity !== undefined && item?.currentQuantity !== null
+//             ? Number(item.currentQuantity)
+//             : 0,
+//         quantityAtClosure:
+//           item?.quantityAtClosure !== undefined && item?.quantityAtClosure !== null
+//             ? Number(item.quantityAtClosure)
+//             : null,
+//       }))
+//       .filter((item: any) => item.codeSageX3 || item.codeSage100);
+
+//     if (normalizedPayload.length === 0) {
+//       return res.status(400).json({
+//         message: 'Aucun article valide à enregistrer',
+//       });
+//     }
+
+//     const existingArticles = await prisma.article.findMany({
+//       where: { campaignId },
+//       select: {
+//         id: true,
+//         codeSageX3: true,
+//         codeSage100: true,
+//       },
+//     });
+
+//     const existingX3 = new Set(
+//       existingArticles
+//         .map((a) => (a.codeSageX3 ? String(a.codeSageX3).trim() : null))
+//         .filter(Boolean)
+//     );
+
+//     const existing100 = new Set(
+//       existingArticles
+//         .map((a) => (a.codeSage100 ? String(a.codeSage100).trim() : null))
+//         .filter(Boolean)
+//     );
+
+//     const seenX3 = new Set<string>();
+//     const seen100 = new Set<string>();
+
+//     const articlesToCreate = normalizedPayload.filter((item: any) => {
+//       const x3 = item.codeSageX3;
+//       const s100 = item.codeSage100;
+
+//       if (x3 && existingX3.has(x3)) return false;
+//       if (s100 && existing100.has(s100)) return false;
+
+//       if (x3 && seenX3.has(x3)) return false;
+//       if (s100 && seen100.has(s100)) return false;
+
+//       if (x3) seenX3.add(x3);
+//       if (s100) seen100.add(s100);
+
+//       return true;
+//     });
+
+//     if (articlesToCreate.length === 0) {
+//       return res.status(200).json({
+//         success: true,
+//         message: 'Tous les articles existent déjà dans cette campagne',
+//         createdCount: 0,
+//         skippedCount: normalizedPayload.length,
+//         createdArticles: [],
+//       });
+//     }
+
+//     const createdArticles = await prisma.$transaction(
+//       articlesToCreate.map((item: any) =>
+//         prisma.article.create({
+//           data: {
+//             campaignId,
+//             codeSageX3: item.codeSageX3,
+//             codeSage100: item.codeSage100,
+//             designation: item.designation || '',
+//             plannedQuantity: item.plannedQuantity,
+//             quantityAtCreation: item.quantityAtCreation,
+//             quantityAtStart: item.quantityAtStart,
+//             currentQuantity: item.currentQuantity,
+//             quantityAtClosure: item.quantityAtClosure,
+//           },
+//         })
+//       )
+//     );
+
+//     console.log('createdArticles:', createdArticles);
+
+//     return res.status(201).json({
+//       success: true,
+//       message: 'Articles enregistrés avec succès',
+//       createdCount: createdArticles.length,
+//       skippedCount: normalizedPayload.length - createdArticles.length,
+//       createdArticles,
+//     });
+//   } catch (error) {
+//     console.error('Bulk articles error:', error);
+//     next(error);
+//   }
+// });
+
+
+/**
+ * Enregistrer plusieurs articles dans la campagne
+ */
+router.post('/:id/articles/bulk', requireAuth, async (req, res, next) => {
+  try {
+    const r = req as AuthRequest;
+    const rawCampaignId = req.params.id;
+    const campaignId = toValidNumber(rawCampaignId, 'campaignId');
+
+    if (!r.user?.userId) {
+      return res.status(401).json({
+        message: 'Utilisateur non authentifié',
+      });
+    }
+
+    const currentUserId = Number(r.user.userId);
+
+    console.log('=== BULK ARTICLES START ===');
+    console.log('rawCampaignId:', rawCampaignId);
+    console.log('campaignId:', campaignId);
+    console.log('currentUserId:', currentUserId);
+    console.log('req.body:', JSON.stringify(req.body, null, 2));
+
+    const campaign = await prisma.campaign.findUnique({
+      where: { id: campaignId },
+      select: { id: true, name: true },
+    });
+
+    if (!campaign) {
+      return res.status(404).json({
+        message: 'Campagne introuvable',
+      });
+    }
+
+    const payload = req.body?.articles;
+
+    if (!Array.isArray(payload) || payload.length === 0) {
+      return res.status(400).json({
+        message: 'Aucun article à enregistrer',
+      });
+    }
+
+    const normalizedPayload = payload
+      .map((item: any) => ({
+        codeSageX3: item?.codeSageX3 ? String(item.codeSageX3).trim() : null,
+        codeSage100: item?.codeSage100 ? String(item.codeSage100).trim() : null,
+        designation: item?.designation ? String(item.designation).trim() : '',
+        plannedQuantity:
+          item?.plannedQuantity !== undefined && item?.plannedQuantity !== null
+            ? Number(item.plannedQuantity)
+            : null,
+        quantityAtCreation:
+          item?.quantityAtCreation !== undefined && item?.quantityAtCreation !== null
+            ? Number(item.quantityAtCreation)
+            : 0,
+        quantityAtStart:
+          item?.quantityAtStart !== undefined && item?.quantityAtStart !== null
+            ? Number(item.quantityAtStart)
+            : null,
+        currentQuantity:
+          item?.currentQuantity !== undefined && item?.currentQuantity !== null
+            ? Number(item.currentQuantity)
+            : 0,
+        quantityAtClosure:
+          item?.quantityAtClosure !== undefined && item?.quantityAtClosure !== null
+            ? Number(item.quantityAtClosure)
+            : null,
+      }))
+      .filter((item: any) => item.codeSageX3 || item.codeSage100);
+
+    if (normalizedPayload.length === 0) {
+      return res.status(400).json({
+        message: 'Aucun article valide à enregistrer',
+      });
+    }
+
+    const existingArticles = await prisma.article.findMany({
+      where: { campaignId },
+      select: {
+        id: true,
+        codeSageX3: true,
+        codeSage100: true,
+      },
+    });
+
+    const existingX3 = new Set(
+      existingArticles
+        .map((a) => (a.codeSageX3 ? String(a.codeSageX3).trim() : null))
+        .filter(Boolean)
+    );
+
+    const existing100 = new Set(
+      existingArticles
+        .map((a) => (a.codeSage100 ? String(a.codeSage100).trim() : null))
+        .filter(Boolean)
+    );
+
+    const seenX3 = new Set<string>();
+    const seen100 = new Set<string>();
+
+    const articlesToCreate = normalizedPayload.filter((item: any) => {
+      const x3 = item.codeSageX3;
+      const s100 = item.codeSage100;
+
+      if (x3 && existingX3.has(x3)) return false;
+      if (s100 && existing100.has(s100)) return false;
+
+      if (x3 && seenX3.has(x3)) return false;
+      if (s100 && seen100.has(s100)) return false;
+
+      if (x3) seenX3.add(x3);
+      if (s100) seen100.add(s100);
+
+      return true;
+    });
+
+    if (articlesToCreate.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'Tous les articles existent déjà dans cette campagne',
+        createdCount: 0,
+        skippedCount: normalizedPayload.length,
+        createdArticles: [],
+      });
+    }
+
+    const createdArticles = await prisma.$transaction(
+      articlesToCreate.map((item: any) =>
+        prisma.article.create({
+          data: {
+            codeSageX3: item.codeSageX3,
+            codeSage100: item.codeSage100,
+            designation: item.designation || '',
+            plannedQuantity: item.plannedQuantity,
+            quantityAtCreation: item.quantityAtCreation,
+            quantityAtStart: item.quantityAtStart,
+            currentQuantity: item.currentQuantity,
+            quantityAtClosure: item.quantityAtClosure,
+            campaign: {
+              connect: { id: campaignId },
+            },
+            createdBy: {
+              connect: { id: currentUserId },
+            },
+          },
+        })
+      )
+    );
+
+    console.log('createdArticles:', createdArticles);
+
+    return res.status(201).json({
+      success: true,
+      message: 'Articles enregistrés avec succès',
+      createdCount: createdArticles.length,
+      skippedCount: normalizedPayload.length - createdArticles.length,
+      createdArticles,
+    });
+  } catch (error) {
+    console.error('Bulk articles error:', error);
+    next(error);
+  }
+});
+
+/**
+ * Supprimer un article
+ */
+router.delete('/:id/articles/:articleId', requireAuth, async (req, res, next) => {
+  try {
+    await prisma.article.delete({
+      where: {
+        id: Number(req.params.articleId),
+      },
+    });
+
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+});
+
 
 export default router;

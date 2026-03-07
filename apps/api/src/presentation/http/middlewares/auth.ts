@@ -4,7 +4,7 @@ import { ApiError } from '@campaign/shared';
 
 export interface AuthRequest extends Request {
   user?: {
-    userId: string;
+    userId: number;
     role: string;
   };
 }
@@ -19,8 +19,16 @@ export const requireAuth = (req: AuthRequest, res: Response, next: NextFunction)
   const token = authHeader.split(' ')[1];
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'super-secret-jwt-key-change-me') as any;
-    req.user = decoded;
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET || 'super-secret-jwt-key-change-me'
+    ) as any;
+
+    req.user = {
+      userId: Number(decoded.userId),
+      role: decoded.role,
+    };
+
     next();
   } catch (error) {
     return res.status(401).json({ message: 'Invalid token' } as ApiError);

@@ -51,14 +51,6 @@ app.get('/health', (req, res) => {
 
 app.use(errorHandler);
 
-// console.log("BOOTSTRAP_ENABLED =", process.env.BOOTSTRAP_ENABLED);
-// console.log("BOOTSTRAP_ADMIN_USERNAME =", process.env.BOOTSTRAP_ADMIN_USERNAME);
-
-// async function start() {
-//   await bootstrapAdmin();
-//   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-// }
-
 // start();
 async function ensureSuperAdminRole() {
 
