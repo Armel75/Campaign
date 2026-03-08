@@ -4,8 +4,8 @@ import morgan from 'morgan';
 import helmet from 'helmet';
 import routes from './presentation/http/routes';
 import { errorHandler } from './presentation/http/middlewares/errorHandler';
-import "dotenv/config";
-import { bootstrapAdmin } from "./bootstrap/adminBootstrap";
+import 'dotenv/config';
+import { bootstrapAdmin } from './bootstrap/adminBootstrap';
 import cookieParser from 'cookie-parser';
 import { PrismaClient } from '@prisma/client';
 import path from 'path';
@@ -25,23 +25,24 @@ app.use(
 );
 app.use(cookieParser());
 
-const WEB_ORIGINS = (process.env.WEB_ORIGIN ?? "http://localhost:5173")
-  .split(",")
-  .map(s => s.trim());
+const WEB_ORIGINS = (process.env.WEB_ORIGIN ?? 'http://localhost:5173')
+  .split(',')
+  .map((s) => s.trim());
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true); // Postman / curl
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
 
-    if (WEB_ORIGINS.includes(origin)) {
-      return callback(null, true);
-    }
+      if (WEB_ORIGINS.includes(origin)) {
+        return callback(null, true);
+      }
 
-    return callback(new Error("Not allowed by CORS"));
-  },
-  credentials: true,
-}));
-
+      return callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+  })
+);
 
 app.use('/api/v1', routes);
 
@@ -51,36 +52,50 @@ app.get('/health', (req, res) => {
 
 app.use(errorHandler);
 
-// start();
 async function ensureSuperAdminRole() {
+  if (process.env.BOOTSTRAP_ENABLED !== 'true') return;
 
-  if (process.env.BOOTSTRAP_ENABLED !== "true") return;
+  const roleName = process.env.BOOTSTRAP_ADMIN_ROLE || 'SUPER_ADMIN';
 
-  const roleName = process.env.BOOTSTRAP_ADMIN_ROLE || "SUPER_ADMIN";
-
-  const role = await prisma.role.findUnique({
-    where: { name: roleName }
+  await prisma.role.upsert({
+    where: { name: roleName },
+    update: {
+      canViewAllCampaigns: true,
+      canEditAllCampaigns: true,
+      canDeleteAllCampaigns: true,
+      canCreateCampaign: true,
+      canManageTasks: true,
+      canAssignTasks: true,
+      canManageCampaignArticles: true,
+      canManageAttachments: true,
+      canExportCampaign: true,
+      canManageUsers: true,
+      canManageRoles: true,
+    },
+    create: {
+      name: roleName,
+      canViewAllCampaigns: true,
+      canEditAllCampaigns: true,
+      canDeleteAllCampaigns: true,
+      canCreateCampaign: true,
+      canManageTasks: true,
+      canAssignTasks: true,
+      canManageCampaignArticles: true,
+      canManageAttachments: true,
+      canExportCampaign: true,
+      canManageUsers: true,
+      canManageRoles: true,
+    },
   });
 
-  if (!role) {
-    await prisma.role.create({
-      data: {
-        name: roleName
-      }
-    });
-
-    console.log(`Role ${roleName} created`);
-  }
+  console.log(`Role ${roleName} ensured with full permissions`);
 }
 
 async function start() {
+  await ensureSuperAdminRole();
+  await bootstrapAdmin();
 
-  await ensureSuperAdminRole();   // création du rôle
-  await bootstrapAdmin();         // création de l'utilisateur admin
-
-  app.listen(PORT, () =>
-    console.log(`Server running on port ${PORT}`)
-  );
+  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 }
 
 start();

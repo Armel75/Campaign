@@ -11,6 +11,11 @@ export default (modelName: string) => {
     throw new Error(`Model ${modelName} not found in Prisma client`);
   }
 
+  const parseId = (id: string) => {
+    const numericId = Number(id);
+    return Number.isNaN(numericId) ? id : numericId;
+  };
+
   router.get('/', requireAuth, async (req, res, next) => {
     try {
       const items = await model.findMany({
@@ -26,9 +31,13 @@ export default (modelName: string) => {
   router.get('/:id', requireAuth, async (req, res, next) => {
     try {
       const item = await model.findUnique({
-        where: { id: req.params.id },
+        where: { id: parseId(req.params.id) },
       });
-      if (!item) return res.status(404).json({ message: 'Not found' });
+
+      if (!item) {
+        return res.status(404).json({ message: 'Not found' });
+      }
+
       res.json(item);
     } catch (error) {
       next(error);
@@ -50,6 +59,7 @@ export default (modelName: string) => {
       const item = await model.create({
         data,
       });
+
       res.status(201).json(item);
     } catch (error) {
       next(error);
@@ -59,9 +69,10 @@ export default (modelName: string) => {
   router.put('/:id', requireAuth, async (req, res, next) => {
     try {
       const item = await model.update({
-        where: { id: req.params.id },
+        where: { id: parseId(req.params.id) },
         data: req.body,
       });
+
       res.json(item);
     } catch (error) {
       next(error);
@@ -71,8 +82,9 @@ export default (modelName: string) => {
   router.delete('/:id', requireAuth, async (req, res, next) => {
     try {
       await model.delete({
-        where: { id: req.params.id },
+        where: { id: parseId(req.params.id) },
       });
+
       res.status(204).send();
     } catch (error) {
       next(error);

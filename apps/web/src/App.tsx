@@ -11,6 +11,8 @@ import { ThemeProvider } from '@/components/theme-provider';
 import UserList from '@/pages/users/UserList';
 import UserForm from '@/pages/users/UserForm';
 import CampaignDetails from '@/pages/campaigns/CampaignDetails';
+import RoleForm from './pages/roles/RoleForm';
+import RoleList from './pages/roles/RoleList';
 
 const ProtectedRoute = () => {
   const { user, isLoading } = useAuth();
@@ -61,7 +63,21 @@ export default function App() {
                   ]}
                 />
               } />
-
+              <Route
+                path="/objectives/:id"
+                element={
+                  <GenericForm
+                    title="Objective"
+                    endpoint="/objectives"
+                    redirectPath="/objectives"
+                    fields={[
+                      { name: 'code', label: 'Code', required: true },
+                      { name: 'label', label: 'Label', required: true },
+                      { name: 'description', label: 'Description' },
+                    ]}
+                  />
+                }
+              />
               {/* Channels */}
               <Route path="/channels" element={
                 <GenericTable 
@@ -69,6 +85,7 @@ export default function App() {
                   endpoint="/channels" 
                   columns={[{ key: 'name', label: 'Name' }, { key: 'description', label: 'Description' }]}
                   createPath="/channels/new"
+                  onEdit={(id) => window.location.href = `/channels/${id}`}
                 />
               } />
               <Route path="/channels/new" element={
@@ -82,6 +99,20 @@ export default function App() {
                   ]}
                 />
               } />
+              <Route
+                path="/channels/:id"
+                element={
+                  <GenericForm
+                    title="Channel"
+                    endpoint="/channels"
+                    redirectPath="/channels"
+                    fields={[
+                      { name: 'name', label: 'Name', required: true },
+                      { name: 'description', label: 'Description' }
+                    ]}
+                  />
+                }
+              />
 
               {/* Tasks */}
               <Route path="/tasks" element={
@@ -142,6 +173,7 @@ export default function App() {
                   endpoint="/target-audiences" 
                   columns={[{ key: 'name', label: 'Name' }, { key: 'description', label: 'Description' }]}
                   createPath="/target-audiences/new"
+                  onEdit={(id) => window.location.href = `/target-audiences/${id}`}
                 />
               } />
               <Route path="/target-audiences/new" element={
@@ -155,6 +187,20 @@ export default function App() {
                   ]}
                 />
               } />
+              <Route
+              path="/target-audiences/:id"
+              element={
+                <GenericForm
+                  title="Target Audience"
+                  endpoint="/target-audiences"
+                  redirectPath="/target-audiences"
+                  fields={[
+                    { name: 'name', label: 'Name', required: true },
+                    { name: 'description', label: 'Description' },
+                  ]}
+                />
+              }
+            />
 
               {/* Expenses */}
               <Route path="/expenses" element={
@@ -186,21 +232,107 @@ export default function App() {
               <Route path="/users" element={<UserList />} />
               <Route path="/users/new" element={<UserForm />} />
               <Route path="/users/:id" element={<UserForm />} />
-              <Route path="/users" element={
-                <GenericTable 
-                  title="Users" 
-                  endpoint="/users" 
-                  columns={[{ key: 'username', label: 'Username' }, { key: 'email', label: 'Email' }]}
-                />
-              } />
-              <Route path="/roles" element={
-                <GenericTable 
-                  title="Roles" 
-                  endpoint="/roles" 
-                  columns={[{ key: 'name', label: 'Name' }]}
-                />
-              } />
 
+              {/* <Route path="/roles" element={
+                <GenericTable
+                  title="Roles"
+                  endpoint="/roles"
+                  columns={[
+                    { key: 'id', label: 'ID' },
+                    { key: 'name', label: 'Name' },
+                    { key: 'createdAt', label: 'Created At', render: (v: string) => new Date(v).toLocaleString() },
+                    { key: 'updatedAt', label: 'Updated At', render: (v: string) => new Date(v).toLocaleString() }
+                  ]}
+                />
+              } /> */}
+              {/* <Route
+                path="/roles"
+                element={
+                  <GenericTable
+                    title="Roles"
+                    endpoint="/roles"
+                    columns={[
+                      { key: 'id', label: 'ID' },
+                      { key: 'name', label: 'Name' },
+
+                      {
+                        key: 'canViewAllCampaigns',
+                        label: 'View All Campaigns',
+                        render: (v: boolean) => (v ? 'Yes' : 'No'),
+                      },
+                      {
+                        key: 'canEditAllCampaigns',
+                        label: 'Edit All Campaigns',
+                        render: (v: boolean) => (v ? 'Yes' : 'No'),
+                      },
+                      {
+                        key: 'canDeleteAllCampaigns',
+                        label: 'Delete All Campaigns',
+                        render: (v: boolean) => (v ? 'Yes' : 'No'),
+                      },
+                      {
+                        key: 'canCreateCampaign',
+                        label: 'Create Campaign',
+                        render: (v: boolean) => (v ? 'Yes' : 'No'),
+                      },
+
+                      {
+                        key: 'canManageTasks',
+                        label: 'Manage Tasks',
+                        render: (v: boolean) => (v ? 'Yes' : 'No'),
+                      },
+                      {
+                        key: 'canAssignTasks',
+                        label: 'Assign Tasks',
+                        render: (v: boolean) => (v ? 'Yes' : 'No'),
+                      },
+
+                      {
+                        key: 'canManageCampaignArticles',
+                        label: 'Manage Campaign Articles',
+                        render: (v: boolean) => (v ? 'Yes' : 'No'),
+                      },
+                      {
+                        key: 'canManageAttachments',
+                        label: 'Manage Attachments',
+                        render: (v: boolean) => (v ? 'Yes' : 'No'),
+                      },
+
+                      {
+                        key: 'canManageUsers',
+                        label: 'Manage Users',
+                        render: (v: boolean) => (v ? 'Yes' : 'No'),
+                      },
+                      {
+                        key: 'canManageRoles',
+                        label: 'Manage Roles',
+                        render: (v: boolean) => (v ? 'Yes' : 'No'),
+                      },
+                      {
+                        key: 'canExportCampaign',
+                        label: 'Export Campaign',
+                        render: (v: boolean) => (v ? 'Yes' : 'No'),
+                      },
+
+                      {
+                        key: 'createdAt',
+                        label: 'Created At',
+                        render: (v: string) => new Date(v).toLocaleString(),
+                      },
+                      {
+                        key: 'updatedAt',
+                        label: 'Updated At',
+                        render: (v: string) => new Date(v).toLocaleString(),
+                      },
+                    ]}
+                    createPath="/roles/new"
+                    onEdit={(id) => (window.location.href = `/roles/${id}`)}
+                  />
+                }
+              />               */}
+              <Route path="/roles" element={<RoleList />} />
+              <Route path="/roles/new" element={<RoleForm />} />
+              <Route path="/roles/:id" element={<RoleForm />} />
             </Route>
           </Routes>
       </AuthProvider>

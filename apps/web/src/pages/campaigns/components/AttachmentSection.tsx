@@ -9,7 +9,7 @@ import api from '@/lib/api';
 import { format } from 'date-fns';
 
 interface Attachment {
-  id: string;
+  id: string | number;
   fileName: string;
   filePath: string;
   uploadedAt: string;
@@ -29,16 +29,15 @@ export default function AttachmentSection({ campaignId, attachments, onUpdate }:
     if (!file) return;
 
     setUploading(true);
-    // In a real app, we would upload to S3/Cloudinary and get a URL.
-    // Here we will simulate it or just store the name if the backend expects a file path.
-    
+
     try {
       await api.post(`/campaigns/${campaignId}/attachments`, {
         fileName: file.name,
-        filePath: `/uploads/${file.name}`, // Mock path
+        filePath: `/uploads/${file.name}`,
         entityType: 'CAMPAIGN',
       });
       onUpdate();
+      e.target.value = '';
     } catch (error) {
       console.error('Upload failed', error);
     } finally {
@@ -46,14 +45,24 @@ export default function AttachmentSection({ campaignId, attachments, onUpdate }:
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (id: string | number) => {
     if (!confirm('Delete this attachment?')) return;
+
     try {
       await api.delete(`/campaigns/${campaignId}/attachments/${id}`);
       onUpdate();
     } catch (error) {
       console.error('Delete failed', error);
     }
+  };
+
+  const handleDownload = (file: Attachment) => {
+    const link = document.createElement('a');
+    link.href = file.filePath;
+    link.download = file.fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
   };
 
   return (
@@ -76,6 +85,7 @@ export default function AttachmentSection({ campaignId, attachments, onUpdate }:
           />
         </div>
       </CardHeader>
+
       <CardContent>
         <Table>
           <TableHeader>
@@ -85,6 +95,7 @@ export default function AttachmentSection({ campaignId, attachments, onUpdate }:
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
+
           <TableBody>
             {attachments.length === 0 ? (
               <TableRow>
@@ -99,14 +110,31 @@ export default function AttachmentSection({ campaignId, attachments, onUpdate }:
                     <FileIcon className="h-4 w-4 text-muted-foreground" />
                     {file.fileName}
                   </TableCell>
-                  <TableCell>{format(new Date(file.uploadedAt), 'MMM d, yyyy HH:mm')}</TableCell>
+
+                  <TableCell>
+                    {format(new Date(file.uploadedAt), 'MMM d, yyyy HH:mm')}
+                  </TableCell>
+
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
-                      <Button variant="ghost" size="icon" onClick={() => alert(`Downloading ${file.fileName}...`)}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleDownload(file)}
+                        className="flex items-center gap-2"
+                      >
                         <Download className="h-4 w-4" />
+                        Télécharger
                       </Button>
-                      <Button variant="ghost" size="icon" className="text-destructive" onClick={() => handleDelete(file.id)}>
+
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => handleDelete(file.id)}
+                        className="flex items-center gap-2"
+                      >
                         <Trash2 className="h-4 w-4" />
+                        Supprimer
                       </Button>
                     </div>
                   </TableCell>

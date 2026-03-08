@@ -13,8 +13,6 @@ import {
   User,
   Target,
   Loader2,
-  FileText,
-  FileSpreadsheet,
   Paperclip,
   CheckSquare,
   Package,
@@ -54,7 +52,37 @@ interface CampaignArticle {
   designation?: string;
   currentQuantity?: number;
   quantity?: number;
+  plannedQuantity?: number | null;
+  quantityAtCreation?: number | null;
+  quantityAtStart?: number | null;
+  quantityAtClosure?: number | null;
   createdAt?: string;
+}
+
+interface CampaignChannelItem {
+  id?: string | number;
+  name?: string;
+  label?: string;
+  title?: string;
+  channel?: {
+    id?: string | number;
+    name?: string;
+    label?: string;
+    title?: string;
+  };
+}
+
+interface CampaignTargetAudienceItem {
+  id?: string | number;
+  name?: string;
+  label?: string;
+  title?: string;
+  targetAudience?: {
+    id?: string | number;
+    name?: string;
+    label?: string;
+    title?: string;
+  };
 }
 
 interface CampaignDetailsType {
@@ -97,6 +125,9 @@ interface CampaignDetailsType {
   location?: string;
   owner?: string;
   manager?: string;
+
+  channels?: CampaignChannelItem[];
+  targetAudiences?: CampaignTargetAudienceItem[];
 
   attachments?: CampaignAttachment[];
   tasks?: CampaignTask[];
@@ -202,6 +233,40 @@ export default function CampaignDetails() {
     campaign?.createdBy?.email ||
     '—';
 
+  const displayChannels = (() => {
+    const values =
+      campaign?.channels
+        ?.map((item) => item?.channel?.name || item?.channel?.label || item?.channel?.title || item?.name || item?.label || item?.title)
+        .filter(Boolean) || [];
+
+    if (values.length > 0) {
+      return values.join(', ');
+    }
+
+    return campaign?.channel || '—';
+  })();
+
+  const displayTargetAudiences = (() => {
+    const values =
+      campaign?.targetAudiences
+        ?.map(
+          (item) =>
+            item?.targetAudience?.name ||
+            item?.targetAudience?.label ||
+            item?.targetAudience?.title ||
+            item?.name ||
+            item?.label ||
+            item?.title
+        )
+        .filter(Boolean) || [];
+
+    if (values.length > 0) {
+      return values.join(', ');
+    }
+
+    return campaign?.targetAudience || '—';
+  })();
+
   const stats = [
     {
       label: 'Articles',
@@ -236,10 +301,10 @@ export default function CampaignDetails() {
   }) => (
     <div className="flex items-start py-2.5 border-b last:border-b-0 border-slate-100 dark:border-slate-800">
       <div className="w-40 shrink-0 flex items-center text-xs font-medium text-slate-500 dark:text-slate-400">
-        {Icon && <Icon className="h-3.5 w-3.5 mr-2" />}
-        {label}
+        {Icon && <Icon className="h-3.5 w-3.5 mr-2 shrink-0" />}
+        <span>{label}</span>
       </div>
-      <div className="flex-1 text-sm text-slate-900 dark:text-slate-100 break-words">
+      <div className="flex-1 min-w-0 text-sm text-slate-900 dark:text-slate-100 break-words overflow-hidden">
         {value ?? '—'}
       </div>
     </div>
@@ -267,7 +332,6 @@ export default function CampaignDetails() {
 
   return (
     <div className="flex flex-col min-h-full bg-white dark:bg-slate-950 lg:bg-slate-50/50 lg:dark:bg-slate-950 transition-colors duration-200">
-      {/* Top bar */}
       <div className="sticky top-0 z-20 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between px-6 py-4">
           <div className="flex items-center gap-4">
@@ -303,12 +367,9 @@ export default function CampaignDetails() {
         </div>
       </div>
 
-      {/* Content */}
       <div className="flex-1 overflow-auto">
         <div className="max-w-7xl mx-auto w-full p-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
-          {/* Left side */}
           <div className="lg:col-span-8 space-y-8">
-            {/* Header block */}
             <div className="space-y-4">
               <div className="flex flex-wrap items-center gap-3">
                 <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
@@ -337,7 +398,6 @@ export default function CampaignDetails() {
               </div>
             </div>
 
-            {/* Stats */}
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
               {stats.map((item) => {
                 const Icon = item.icon;
@@ -359,7 +419,6 @@ export default function CampaignDetails() {
               })}
             </div>
 
-            {/* Description */}
             <Card>
               <CardHeader>
                 <CardTitle>Description de la campagne</CardTitle>
@@ -371,7 +430,6 @@ export default function CampaignDetails() {
               </CardContent>
             </Card>
 
-            {/* Articles quick overview */}
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0">
                 <CardTitle>Articles de la campagne</CardTitle>
@@ -385,14 +443,12 @@ export default function CampaignDetails() {
                     Aucun article associé à cette campagne.
                   </div>
                 ) : (
-                  <div className="overflow-x-auto rounded-xl border">
+                  <div className="rounded-xl border overflow-hidden">
                     <table className="w-full text-sm">
                       <thead className="bg-slate-50 dark:bg-slate-900">
                         <tr className="border-b">
-                          <th className="px-4 py-3 text-left font-medium">Code Sage X3</th>
-                          <th className="px-4 py-3 text-left font-medium">Code Sage 100</th>
-                          <th className="px-4 py-3 text-left font-medium">Désignation</th>
-                          <th className="px-4 py-3 text-right font-medium">Quantité actuelle</th>
+                          <th className="px-4 py-3 text-left font-medium">Informations article</th>
+                          <th className="px-4 py-3 text-left font-medium">Quantités</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -401,13 +457,96 @@ export default function CampaignDetails() {
                             key={article.id}
                             className="border-b last:border-b-0 hover:bg-slate-50/70 dark:hover:bg-slate-900/40"
                           >
-                            <td className="px-4 py-3">{article.codeSageX3 || '—'}</td>
-                            <td className="px-4 py-3">{article.codeSage100 || '—'}</td>
-                            <td className="px-4 py-3 font-medium">
-                              {article.designation || '—'}
-                            </td>
-                            <td className="px-4 py-3 text-right">
-                              {article.currentQuantity ?? article.quantity ?? 0}
+                            <td colSpan={2} className="p-0">
+                              <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                  <div>
+                                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                                      Code Sage X3
+                                    </div>
+                                    <div className="mt-1 font-medium text-slate-900 dark:text-slate-100">
+                                      {article.codeSageX3 || '—'}
+                                    </div>
+                                  </div>
+
+                                  <div>
+                                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                                      Code Sage 100
+                                    </div>
+                                    <div className="mt-1 font-medium text-slate-900 dark:text-slate-100">
+                                      {article.codeSage100 || '—'}
+                                    </div>
+                                  </div>
+
+                                  <div>
+                                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                                      Désignation
+                                    </div>
+                                    <div className="mt-1 font-medium text-slate-900 dark:text-slate-100 break-words">
+                                      {article.designation || '—'}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="px-4 py-3 bg-slate-50/60 dark:bg-slate-900/40">
+                                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2">
+                                    <div className="text-[11px] leading-4 text-slate-500 dark:text-slate-400">
+                                      Quantité
+                                      <br />
+                                      prévue
+                                    </div>
+                                    <div className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">
+                                      {article.plannedQuantity ?? 0}
+                                    </div>
+                                  </div>
+
+                                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2">
+                                    <div className="text-[11px] leading-4 text-slate-500 dark:text-slate-400">
+                                      Quantité
+                                      <br />
+                                      à la création
+                                    </div>
+                                    <div className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">
+                                      {article.quantityAtCreation ?? 0}
+                                    </div>
+                                  </div>
+
+                                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2">
+                                    <div className="text-[11px] leading-4 text-slate-500 dark:text-slate-400">
+                                      Quantité
+                                      <br />
+                                      au démarrage
+                                    </div>
+                                    <div className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">
+                                      {article.quantityAtStart ?? 0}
+                                    </div>
+                                  </div>
+
+                                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2">
+                                    <div className="text-[11px] leading-4 text-slate-500 dark:text-slate-400">
+                                      Quantité
+                                      <br />
+                                      courante
+                                    </div>
+                                    <div className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">
+                                      {article.currentQuantity ?? article.quantity ?? 0}
+                                    </div>
+                                  </div>
+
+                                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2">
+                                    <div className="text-[11px] leading-4 text-slate-500 dark:text-slate-400">
+                                      Quantité
+                                      <br />
+                                      à la clôture
+                                    </div>
+                                    <div className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">
+                                      {article.quantityAtClosure ?? 0}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -418,21 +557,18 @@ export default function CampaignDetails() {
               </CardContent>
             </Card>
 
-            {/* Articles CRUD section */}
             <CampaignArticlesSection
               campaignId={campaign.id}
               articles={articles}
               onUpdate={fetchCampaign}
             />
 
-            {/* Tasks CRUD section */}
             <TaskSection
               campaignId={campaign.id}
               tasks={tasks}
               onUpdate={fetchCampaign}
             />
 
-            {/* Attachments CRUD section */}
             <AttachmentSection
               campaignId={campaign.id}
               attachments={attachments}
@@ -440,9 +576,7 @@ export default function CampaignDetails() {
             />
           </div>
 
-          {/* Right side */}
           <div className="lg:col-span-4 space-y-6">
-            {/* Main properties */}
             <Card>
               <CardHeader>
                 <CardTitle>Propriétés</CardTitle>
@@ -473,23 +607,23 @@ export default function CampaignDetails() {
                 />
                 <PropertyRow
                   label="Canal"
-                  value={campaign.channel || '—'}
+                  value={displayChannels}
                 />
-                <PropertyRow
+                {/* <PropertyRow
                   label="Type"
                   value={campaign.type || '—'}
-                />
-                <PropertyRow
+                /> */}
+                {/* <PropertyRow
                   label="Priorité"
                   value={campaign.priority || '—'}
-                />
+                /> */}
                 <PropertyRow
                   label="Budget"
                   value={campaign.budget ?? '—'}
                 />
                 <PropertyRow
                   label="Cible"
-                  value={campaign.targetAudience || '—'}
+                  value={displayTargetAudiences}
                 />
                 <PropertyRow
                   label="Responsable"
@@ -502,7 +636,6 @@ export default function CampaignDetails() {
               </CardContent>
             </Card>
 
-            {/* Audit / meta */}
             <Card>
               <CardHeader>
                 <CardTitle>Méta informations</CardTitle>
@@ -539,7 +672,6 @@ export default function CampaignDetails() {
               </CardContent>
             </Card>
 
-            {/* Business context */}
             <Card>
               <CardHeader>
                 <CardTitle>Contexte métier</CardTitle>
@@ -566,20 +698,6 @@ export default function CampaignDetails() {
                 />
               </CardContent>
             </Card>
-
-            {/* Raw info fallback */}
-            {/* <Card>
-              <CardHeader>
-                <CardTitle>Toutes les informations disponibles</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="rounded-lg bg-slate-950 text-slate-100 p-4 text-xs overflow-auto max-h-[420px]">
-                  <pre className="whitespace-pre-wrap break-words">
-                    {JSON.stringify(campaign, null, 2)}
-                  </pre>
-                </div>
-              </CardContent>
-            </Card> */}
           </div>
         </div>
       </div>

@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Plus, Trash2, Loader2, Search, PackageCheck, AlertCircle } from 'lucide-react';
 import api from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
+import { Fragment } from 'react';
 
 type ArticleSource = 'SAGE_X3' | 'SAGE_100';
 
@@ -201,7 +202,6 @@ export default function CampaignArticlesSection({
               <TableHead>Code Sage X3</TableHead>
               <TableHead>Code Sage 100</TableHead>
               <TableHead>Désignation</TableHead>
-              <TableHead className="text-right">Qté courante</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -209,33 +209,103 @@ export default function CampaignArticlesSection({
           <TableBody>
             {articles.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
                   Aucun article ajouté pour cette campagne.
                 </TableCell>
               </TableRow>
             ) : (
               articles.map((article) => (
-                <TableRow key={article.id}>
-                  <TableCell className="font-mono">{article.codeSageX3 || '—'}</TableCell>
-                  <TableCell className="font-mono">{article.codeSage100 || '—'}</TableCell>
-                  <TableCell className="font-medium">{article.designation || '—'}</TableCell>
-                  <TableCell className="text-right">{article.currentQuantity ?? 0}</TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="text-destructive"
-                      onClick={() => handleDelete(article.id)}
-                      disabled={deletingId === article.id}
-                    >
-                      {deletingId === article.id ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Trash2 className="h-4 w-4" />
-                      )}
-                    </Button>
-                  </TableCell>
-                </TableRow>
+                <Fragment key={article.id}>
+                  <TableRow className="align-top">
+                    <TableCell className="font-mono align-top">
+                      <div className="text-xs text-muted-foreground mb-1">Code Sage X3</div>
+                      <div className="font-medium">{article.codeSageX3 || '—'}</div>
+                    </TableCell>
+
+                    <TableCell className="font-mono align-top">
+                      <div className="text-xs text-muted-foreground mb-1">Code Sage 100</div>
+                      <div className="font-medium">{article.codeSage100 || '—'}</div>
+                    </TableCell>
+
+                    <TableCell className="align-top">
+                      <div className="text-xs text-muted-foreground mb-1">Désignation</div>
+                      <div className="font-medium break-words">{article.designation || '—'}</div>
+                    </TableCell>
+
+                    <TableCell className="text-right align-top" rowSpan={2}>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        className="flex items-center gap-2 ml-auto"
+                        onClick={() => handleDelete(article.id)}
+                        disabled={deletingId === article.id}
+                      >
+                        {deletingId === article.id ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Suppression...
+                          </>
+                        ) : (
+                          <>
+                            <Trash2 className="h-4 w-4" />
+                            Supprimer
+                          </>
+                        )}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+
+                  <TableRow className="bg-muted/20">
+                    <TableCell colSpan={3} className="pt-2 pb-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                        <div className="rounded-lg border bg-background px-3 py-3">
+                          <div className="text-xs text-muted-foreground leading-5">
+                            Quantité prévue
+                          </div>
+                          <div className="mt-1 text-base font-semibold">
+                            {article.plannedQuantity ?? 0}
+                          </div>
+                        </div>
+
+                        <div className="rounded-lg border bg-background px-3 py-3">
+                          <div className="text-xs text-muted-foreground leading-5">
+                            Quantité à la création
+                          </div>
+                          <div className="mt-1 text-base font-semibold">
+                            {article.quantityAtCreation ?? 0}
+                          </div>
+                        </div>
+
+                        <div className="rounded-lg border bg-background px-3 py-3">
+                          <div className="text-xs text-muted-foreground leading-5">
+                            Quantité au démarrage
+                          </div>
+                          <div className="mt-1 text-base font-semibold">
+                            {article.quantityAtStart ?? 0}
+                          </div>
+                        </div>
+
+                        <div className="rounded-lg border bg-background px-3 py-3">
+                          <div className="text-xs text-muted-foreground leading-5">
+                            Quantité courante
+                          </div>
+                          <div className="mt-1 text-base font-semibold">
+                            {article.currentQuantity ?? 0}
+                          </div>
+                        </div>
+
+                        <div className="rounded-lg border bg-background px-3 py-3">
+                          <div className="text-xs text-muted-foreground leading-5">
+                            Quantité à la clôture
+                          </div>
+                          <div className="mt-1 text-base font-semibold">
+                            {article.quantityAtClosure ?? 0}
+                          </div>
+                        </div>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                </Fragment>
               ))
             )}
           </TableBody>
@@ -318,7 +388,11 @@ export default function CampaignArticlesSection({
                         <TableHead>Code Sage X3</TableHead>
                         <TableHead>Code Sage 100</TableHead>
                         <TableHead>Désignation</TableHead>
+                        <TableHead className="text-right">Qté prévue</TableHead>
+                        <TableHead className="text-right">Qté à la création</TableHead>
+                        <TableHead className="text-right">Qté au démarrage</TableHead>
                         <TableHead className="text-right">Qté courante</TableHead>
+                        <TableHead className="text-right">Qté à la clôture</TableHead>
                         <TableHead>Statut</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -330,7 +404,11 @@ export default function CampaignArticlesSection({
                           <TableCell className="font-mono">{item.codeSageX3 || '—'}</TableCell>
                           <TableCell className="font-mono">{item.codeSage100 || '—'}</TableCell>
                           <TableCell className="font-medium">{item.designation || '—'}</TableCell>
+                          <TableCell className="text-right">0</TableCell>
                           <TableCell className="text-right">{item.currentQuantity ?? 0}</TableCell>
+                          <TableCell className="text-right">0</TableCell>
+                          <TableCell className="text-right">{item.currentQuantity ?? 0}</TableCell>
+                          <TableCell className="text-right">0</TableCell>
                           <TableCell>
                             {item.found ? (
                               <Badge className="bg-green-100 text-green-800 border-green-200 hover:bg-green-100">

@@ -43,6 +43,25 @@ model User {
 model Role {
   id        Int   @id @default(autoincrement())
   name      String   @unique
+
+  // Campaign permissions
+  canViewAllCampaigns      Boolean @default(false) @map("can_view_all_campaigns")
+  canEditAllCampaigns      Boolean @default(false) @map("can_edit_all_campaigns")
+  canDeleteAllCampaigns    Boolean @default(false) @map("can_delete_all_campaigns")
+  canCreateCampaign        Boolean @default(false) @map("can_create_campaign")
+
+  // Tasks
+  canManageTasks            Boolean @default(false) @map("can_manage_tasks")
+  canAssignTasks            Boolean @default(false) @map("can_assign_tasks")
+
+  // Campaign content
+  canManageCampaignArticles Boolean @default(false) @map("can_manage_campaign_articles")
+  canManageAttachments      Boolean @default(false) @map("can_manage_attachments")
+
+  // Administration
+  canManageUsers            Boolean @default(false) @map("can_manage_users")
+  canManageRoles            Boolean @default(false) @map("can_manage_roles")
+  canExportCampaign         Boolean @default(false) @map("can_export_campaign")
   users     User[]
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

@@ -163,7 +163,7 @@ export default function TaskSection({ campaignId, tasks, onUpdate }: TaskSection
         </Button>
       </CardHeader>
 
-      <CardContent>
+      <CardContent className="p-6 w-full">
         <Table>
           <TableHeader>
             <TableRow>
@@ -191,17 +191,27 @@ export default function TaskSection({ campaignId, tasks, onUpdate }: TaskSection
                   <TableCell>{getStatusBadge(task.status)}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
-                      <Button variant="ghost" size="icon" onClick={() => openEditDialog(task)}>
-                        <Pencil className="h-4 w-4" />
-                      </Button>
+                      
                       <Button
-                        variant="ghost"
-                        size="icon"
-                        className="text-destructive"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openEditDialog(task)}
+                        className="flex items-center gap-2"
+                      >
+                        <Pencil className="h-4 w-4" />
+                        Modifier
+                      </Button>
+
+                      <Button
+                        variant="destructive"
+                        size="sm"
                         onClick={() => handleDelete(task.id)}
+                        className="flex items-center gap-2"
                       >
                         <Trash2 className="h-4 w-4" />
+                        Supprimer
                       </Button>
+
                     </div>
                   </TableCell>
                 </TableRow>

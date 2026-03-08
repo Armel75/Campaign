@@ -5,11 +5,28 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { searchArticlesInCatalog, testArticleCatalogConnection } from '../../../services/articleCatalog.service';
-
+import { getCurrentUserWithRole } from '../../../services/user.service';
 
 const router = Router();
 
 type AuthRequest = Request & { user: { userId: number } };
+
+type CurrentUserWithRole = {
+  id: number;
+  role?: {
+    canViewAllCampaigns?: boolean;
+    canEditAllCampaigns?: boolean;
+    canDeleteAllCampaigns?: boolean;
+    canCreateCampaign?: boolean;
+    canManageTasks?: boolean;
+    canAssignTasks?: boolean;
+    canManageCampaignArticles?: boolean;
+    canManageAttachments?: boolean;
+    canManageUsers?: boolean;
+    canManageRoles?: boolean;
+    canExportCampaign?: boolean;
+  } | null;
+};
 
 // dossier stable : apps/api/uploads/campaigns
 const uploadDir = path.resolve(__dirname, '../../../../uploads/campaigns');
@@ -71,39 +88,66 @@ function removePhysicalFiles(filePaths: string[]) {
   }
 }
 
-// List
-// router.get('/', requireAuth, async (_req, res, next) => {
-//   try {
-//     const campaigns = await prisma.campaign.findMany({
-//       include: {
-//         objective: true,
-//         createdBy: { select: { username: true } },
-//         channels: {
-//           include: {
-//             channel: true,
-//           },
-//         },
-//         targetAudiences: {
-//           include: {
-//             targetAudience: true,
-//           },
-//         },
-//         attachments: true,
-//         _count: { select: { leads: true, tasks: true } },
-//       },
-//       orderBy: { updatedAt: 'desc' },
-//     });
+async function getAuthorizedUser(req: AuthRequest, res: any) {
+  if (!req.user?.userId) {
+    res.status(401).json({ message: 'Utilisateur non authentifié' });
+    return null;
+  }
 
-//     res.json({ data: campaigns });
-//   } catch (error) {
-//     next(error);
-//   }
-// });
+  const currentUser = (await getCurrentUserWithRole(Number(req.user.userId))) as CurrentUserWithRole | null;
+
+  if (!currentUser) {
+    res.status(401).json({ message: 'Utilisateur introuvable' });
+    return null;
+  }
+
+  return currentUser;
+}
+
+async function getCampaignOr404(campaignId: number, res: any) {
+  const campaign = await prisma.campaign.findUnique({
+    where: { id: campaignId },
+    select: {
+      id: true,
+      createdById: true,
+      status: true,
+      name: true,
+    },
+  });
+
+  if (!campaign) {
+    res.status(404).json({ message: 'Campagne introuvable' });
+    return null;
+  }
+
+  return campaign;
+}
+
+function canAccessOwnCampaign(currentUser: CurrentUserWithRole, campaignCreatedById: number) {
+  return currentUser.id === campaignCreatedById;
+}
+
+function canViewCampaign(currentUser: CurrentUserWithRole, campaignCreatedById: number) {
+  return !!currentUser.role?.canViewAllCampaigns || canAccessOwnCampaign(currentUser, campaignCreatedById);
+}
+
+function canEditCampaign(currentUser: CurrentUserWithRole, campaignCreatedById: number) {
+  return !!currentUser.role?.canEditAllCampaigns || canAccessOwnCampaign(currentUser, campaignCreatedById);
+}
+
+function canDeleteCampaign(currentUser: CurrentUserWithRole, campaignCreatedById: number) {
+  return !!currentUser.role?.canDeleteAllCampaigns || canAccessOwnCampaign(currentUser, campaignCreatedById);
+}
 
 // List
-router.get('/', requireAuth, async (_req, res, next) => {
+router.get('/', requireAuth, async (req, res, next) => {
   try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
     const campaigns = await prisma.campaign.findMany({
+      where: currentUser.role?.canViewAllCampaigns ? undefined : { createdById: currentUser.id },
       include: {
         objective: true,
         createdBy: {
@@ -146,6 +190,12 @@ router.get('/', requireAuth, async (_req, res, next) => {
 router.post('/', requireAuth, upload.array('attachments'), async (req, res, next) => {
   try {
     const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    if (!currentUser.role?.canCreateCampaign) {
+      return res.status(403).json({ message: 'Accès refusé : création de campagne non autorisée' });
+    }
 
     const { name, description, objectiveId, startDate, endDate, status } = req.body;
 
@@ -166,10 +216,6 @@ router.post('/', requireAuth, upload.array('attachments'), async (req, res, next
       }))
     );
 
-    if (!r.user?.userId) {
-      return res.status(401).json({ message: 'Utilisateur non authentifié' });
-    }
-
     const campaign = await prisma.campaign.create({
       data: {
         name,
@@ -178,7 +224,7 @@ router.post('/', requireAuth, upload.array('attachments'), async (req, res, next
         startDate: toValidDate(startDate),
         endDate: toValidDate(endDate),
         status,
-        createdById: Number(r.user.userId),
+        createdById: Number(currentUser.id),
 
         channels: {
           create: channelIds.map((channelId) => ({
@@ -203,7 +249,7 @@ router.post('/', requireAuth, upload.array('attachments'), async (req, res, next
           entityType: 'campaign',
           entityId: String(campaign.id),
           campaignId: campaign.id,
-          createdById: Number(r.user.userId),
+          createdById: Number(currentUser.id),
         })),
       });
     }
@@ -250,39 +296,19 @@ router.post('/', requireAuth, upload.array('attachments'), async (req, res, next
 });
 
 // Get One
-// router.get('/:id', requireAuth, async (req, res, next) => {
-//   try {
-//     const campaignId = toValidNumber(req.params.id, 'campaignId');
-
-//     const campaign = await prisma.campaign.findUnique({
-//       where: { id: campaignId },
-//       include: {
-//         objective: true,
-//         createdBy: { select: { username: true } },
-//         channels: { include: { channel: true } },
-//         targetAudiences: { include: { targetAudience: true } },
-//         attachments: true,
-//         metrics: true,
-//         kpiTargets: true,
-//         tasks: true,
-//         leads: { take: 5, orderBy: { createdAt: 'desc' } },
-//       },
-//     });
-
-//     if (!campaign) {
-//       return res.status(404).json({ message: 'Not found' });
-//     }
-
-//     res.json({ data: campaign });
-//   } catch (error) {
-//     next(error);
-//   }
-// });
-
-// Get One
 router.get('/:id', requireAuth, async (req, res, next) => {
   try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
     const campaignId = toValidNumber(req.params.id, 'campaignId');
+    const campaignOwnership = await getCampaignOr404(campaignId, res);
+    if (!campaignOwnership) return;
+
+    if (!canViewCampaign(currentUser, campaignOwnership.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette campagne' });
+    }
 
     const campaign = await prisma.campaign.findUnique({
       where: { id: campaignId },
@@ -345,7 +371,17 @@ router.get('/:id', requireAuth, async (req, res, next) => {
 // Update
 router.put('/:id', requireAuth, upload.array('attachments'), async (req, res, next) => {
   try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
     const campaignId = toValidNumber(req.params.id, 'campaignId');
+    const campaignOwnership = await getCampaignOr404(campaignId, res);
+    if (!campaignOwnership) return;
+
+    if (!canEditCampaign(currentUser, campaignOwnership.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé : modification de campagne non autorisée' });
+    }
 
     const { name, description, objectiveId, startDate, endDate, status } = req.body;
 
@@ -401,6 +437,7 @@ router.put('/:id', requireAuth, upload.array('attachments'), async (req, res, ne
           entityType: 'campaign',
           entityId: String(campaignId),
           campaignId,
+          createdById: Number(currentUser.id),
         })),
       });
     }
@@ -424,7 +461,17 @@ router.put('/:id', requireAuth, upload.array('attachments'), async (req, res, ne
 // Delete
 router.delete('/:id', requireAuth, async (req, res, next) => {
   try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
     const campaignId = toValidNumber(req.params.id, 'campaignId');
+    const campaignOwnership = await getCampaignOr404(campaignId, res);
+    if (!campaignOwnership) return;
+
+    if (!canDeleteCampaign(currentUser, campaignOwnership.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé : suppression de campagne non autorisée' });
+    }
 
     const attachments = await prisma.attachment.findMany({
       where: { campaignId },
@@ -452,87 +499,27 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
   }
 });
 
-
 // --- Sub-resources ---
-
-// Add Task
-// router.post('/:id/tasks', requireAuth, async (req, res, next) => {
-//   try {
-//     const { title, description, assignedTo, dueDate, status } = req.body;
-//     const task = await prisma.task.create({
-//       data: {
-//         campaignId: req.params.id,
-//         title,
-//         description,
-//         assignedTo,
-//         dueDate: new Date(dueDate),
-//         status,
-//       },
-//     });
-//     res.status(201).json(task);
-//   } catch (error) {
-//     next(error);
-//   }
-// });
-
-// Add Task
-// router.post('/:id/tasks', requireAuth, async (req, res, next) => {
-//   try {
-//     const r = req as AuthRequest;
-
-//     const campaignId = toValidNumber(req.params.id, 'campaignId');
-//     const { title, description, assignedTo, dueDate, status } = req.body;
-
-//     if (!title || !String(title).trim()) {
-//       return res.status(400).json({ message: 'Title is required' });
-//     }
-
-//     const assignedToId = toValidNumber(assignedTo, 'assignedTo');
-
-//     const task = await prisma.task.create({
-//       data: {
-//         campaignId,
-//         createdById: r.user.userId,
-//         title: String(title).trim(),
-//         description: description ? String(description).trim() : null,
-//         assignedTo: assignedToId,
-//         dueDate: toValidDate(dueDate),
-//         status: status || 'TODO',
-//       },
-//       include: {
-//         assignee: {
-//           select: {
-//             id: true,
-//             username: true,
-//             email: true,
-//           },
-//         },
-//         createdBy: {
-//           select: {
-//             id: true,
-//             username: true,
-//             email: true,
-//           },
-//         },
-//       },
-//     });
-
-//     res.status(201).json(task);
-//   } catch (error) {
-//     next(error);
-//   }
-// });
 
 // Add Task
 router.post('/:id/tasks', requireAuth, async (req, res, next) => {
   try {
     const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
 
-    if (!r.user?.userId) {
-      return res.status(401).json({ message: 'Utilisateur non authentifié' });
+    if (!currentUser.role?.canManageTasks) {
+      return res.status(403).json({ message: 'Accès refusé : gestion des tâches non autorisée' });
     }
 
     const campaignId = toValidNumber(req.params.id, 'campaignId');
+    const campaignOwnership = await getCampaignOr404(campaignId, res);
+    if (!campaignOwnership) return;
+
+    if (!canEditCampaign(currentUser, campaignOwnership.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette campagne' });
+    }
+
     const { title, description, assignedTo, dueDate, status } = req.body;
 
     if (!title || !String(title).trim()) {
@@ -540,7 +527,11 @@ router.post('/:id/tasks', requireAuth, async (req, res, next) => {
     }
 
     const assignedToId = assignedTo ? toValidNumber(assignedTo, 'assignedTo') : null;
-    const currentUserId = Number(r.user.userId);
+    const currentUserId = Number(currentUser.id);
+
+    if (assignedToId && assignedToId !== currentUserId && !currentUser.role?.canAssignTasks) {
+      return res.status(403).json({ message: 'Accès refusé : assignation de tâche non autorisée' });
+    }
 
     const task = await prisma.task.create({
       data: {
@@ -589,6 +580,22 @@ router.post('/:id/tasks', requireAuth, async (req, res, next) => {
 // Update Task
 router.put('/:id/tasks/:taskId', requireAuth, async (req, res, next) => {
   try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    if (!currentUser.role?.canManageTasks) {
+      return res.status(403).json({ message: 'Accès refusé : gestion des tâches non autorisée' });
+    }
+
+    const campaignId = toValidNumber(req.params.id, 'campaignId');
+    const campaignOwnership = await getCampaignOr404(campaignId, res);
+    if (!campaignOwnership) return;
+
+    if (!canEditCampaign(currentUser, campaignOwnership.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette campagne' });
+    }
+
     const taskId = toValidNumber(req.params.taskId, 'taskId');
     const { title, description, assignedTo, dueDate, status } = req.body;
 
@@ -599,7 +606,13 @@ router.put('/:id/tasks/:taskId', requireAuth, async (req, res, next) => {
     };
 
     if (assignedTo !== undefined && assignedTo !== null && assignedTo !== '') {
-      data.assignedTo = toValidNumber(assignedTo, 'assignedTo');
+      const assignedToId = toValidNumber(assignedTo, 'assignedTo');
+
+      if (assignedToId !== currentUser.id && !currentUser.role?.canAssignTasks) {
+        return res.status(403).json({ message: 'Accès refusé : assignation de tâche non autorisée' });
+      }
+
+      data.assignedTo = assignedToId;
     }
 
     if (dueDate) {
@@ -636,6 +649,22 @@ router.put('/:id/tasks/:taskId', requireAuth, async (req, res, next) => {
 // Delete Task
 router.delete('/:id/tasks/:taskId', requireAuth, async (req, res, next) => {
   try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    if (!currentUser.role?.canManageTasks) {
+      return res.status(403).json({ message: 'Accès refusé : gestion des tâches non autorisée' });
+    }
+
+    const campaignId = toValidNumber(req.params.id, 'campaignId');
+    const campaignOwnership = await getCampaignOr404(campaignId, res);
+    if (!campaignOwnership) return;
+
+    if (!canEditCampaign(currentUser, campaignOwnership.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette campagne' });
+    }
+
     const taskId = toValidNumber(req.params.taskId, 'taskId');
 
     await prisma.task.delete({
@@ -648,12 +677,25 @@ router.delete('/:id/tasks/:taskId', requireAuth, async (req, res, next) => {
   }
 });
 
-
 // Add Attachment
 router.post('/:id/attachments', requireAuth, async (req, res, next) => {
   try {
     const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    if (!currentUser.role?.canManageAttachments) {
+      return res.status(403).json({ message: 'Accès refusé : gestion des pièces jointes non autorisée' });
+    }
+
     const campaignId = toValidNumber(req.params.id, 'campaignId');
+    const campaignOwnership = await getCampaignOr404(campaignId, res);
+    if (!campaignOwnership) return;
+
+    if (!canEditCampaign(currentUser, campaignOwnership.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette campagne' });
+    }
+
     const { fileName, filePath, entityType } = req.body;
 
     const attachment = await prisma.attachment.create({
@@ -663,7 +705,7 @@ router.post('/:id/attachments', requireAuth, async (req, res, next) => {
         filePath,
         entityType: entityType || 'CAMPAIGN',
         entityId: String(campaignId),
-        createdById: Number(r.user.userId),
+        createdById: Number(currentUser.id),
       },
       include: {
         createdBy: {
@@ -685,16 +727,54 @@ router.post('/:id/attachments', requireAuth, async (req, res, next) => {
 // Delete Attachment
 router.delete('/:id/attachments/:attachmentId', requireAuth, async (req, res, next) => {
   try {
-    await prisma.attachment.delete({
-      where: { id: req.params.attachmentId },
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    if (!currentUser.role?.canManageAttachments) {
+      return res.status(403).json({ message: 'Accès refusé : gestion des pièces jointes non autorisée' });
+    }
+
+    const campaignId = Number(req.params.id);
+    const attachmentId = Number(req.params.attachmentId);
+
+    if (Number.isNaN(campaignId) || Number.isNaN(attachmentId)) {
+      return res.status(400).json({ message: 'Invalid campaignId or attachmentId' });
+    }
+
+    const campaignOwnership = await getCampaignOr404(campaignId, res);
+    if (!campaignOwnership) return;
+
+    if (!canEditCampaign(currentUser, campaignOwnership.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette campagne' });
+    }
+
+    const attachment = await prisma.attachment.findFirst({
+      where: {
+        id: attachmentId,
+        campaignId: campaignId,
+      },
     });
+
+    if (!attachment) {
+      return res.status(404).json({ message: 'Attachment not found' });
+    }
+
+    const filePath = path.resolve(process.cwd(), attachment.filePath.replace(/^\/+/, ''));
+
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+
+    await prisma.attachment.delete({
+      where: { id: attachmentId },
+    });
+
     res.status(204).send();
   } catch (error) {
     next(error);
   }
 });
-
-////////////////////////////////
 
 /**
  * Test connexion catalogue
@@ -748,252 +828,27 @@ router.post('/articles/search-catalog', requireAuth, async (req, res, next) => {
 /**
  * Enregistrer plusieurs articles dans la campagne
  */
-// router.post('/:id/articles/bulk', requireAuth, async (req, res, next) => {
-//   try {
-//     const campaignId = Number(req.params.id);
-
-//     if (Number.isNaN(campaignId)) {
-//       return res.status(400).json({ message: 'Invalid campaign id' });
-//     }
-
-//     const payload = req.body?.articles;
-
-//     if (!Array.isArray(payload) || payload.length === 0) {
-//       return res.status(400).json({ message: 'articles is required' });
-//     }
-
-//     const existingArticles = await prisma.article.findMany({
-//       where: { campaignId },
-//       select: {
-//         codeSageX3: true,
-//         codeSage100: true,
-//       },
-//     });
-
-//     const existingX3 = new Set(
-//       existingArticles.map((a) => a.codeSageX3).filter(Boolean)
-//     );
-
-//     const existing100 = new Set(
-//       existingArticles.map((a) => a.codeSage100).filter(Boolean)
-//     );
-
-//     const articlesToCreate = payload.filter((item: any) => {
-//       const x3 = item.codeSageX3 ? String(item.codeSageX3).trim() : null;
-//       const s100 = item.codeSage100 ? String(item.codeSage100).trim() : null;
-
-//       if (x3 && existingX3.has(x3)) return false;
-//       if (s100 && existing100.has(s100)) return false;
-
-//       if (x3) existingX3.add(x3);
-//       if (s100) existing100.add(s100);
-
-//       return true;
-//     });
-
-//     if (articlesToCreate.length === 0) {
-//       return res.status(200).json({
-//         message: 'Aucun nouvel article à enregistrer',
-//         count: 0,
-//       });
-//     }
-
-//     await prisma.article.createMany({
-//       data: articlesToCreate.map((item: any) => ({
-//         campaignId,
-//         codeSageX3: item.codeSageX3 || null,
-//         codeSage100: item.codeSage100 || null,
-//         designation: item.designation || '',
-//         plannedQuantity: item.plannedQuantity ?? null,
-//         quantityAtCreation: item.quantityAtCreation ?? 0,
-//         quantityAtStart: item.quantityAtStart ?? null,
-//         currentQuantity: item.currentQuantity ?? 0,
-//         quantityAtClosure: item.quantityAtClosure ?? null,
-//       })),
-//     });
-
-//     res.status(201).json({
-//       message: 'Articles enregistrés avec succès',
-//       count: articlesToCreate.length,
-//     });
-//   } catch (error) {
-//     next(error);
-//   }
-// });
-
-
-/**
- * Enregistrer plusieurs articles dans la campagne
- */
-// router.post('/:id/articles/bulk', requireAuth, async (req, res, next) => {
-//   try {
-//     const rawCampaignId = req.params.id;
-//     const campaignId = Number(rawCampaignId);
-
-//     console.log('=== BULK ARTICLES START ===');
-//     console.log('rawCampaignId:', rawCampaignId);
-//     console.log('campaignId:', campaignId);
-//     console.log('req.body:', JSON.stringify(req.body, null, 2));
-
-//     if (!rawCampaignId || Number.isNaN(campaignId)) {
-//       return res.status(400).json({
-//         message: 'Identifiant de campagne invalide',
-//       });
-//     }
-
-//     const campaign = await prisma.campaign.findUnique({
-//       where: { id: campaignId },
-//       select: { id: true, name: true },
-//     });
-
-//     if (!campaign) {
-//       return res.status(404).json({
-//         message: 'Campagne introuvable',
-//       });
-//     }
-
-//     const payload = req.body?.articles;
-
-//     if (!Array.isArray(payload) || payload.length === 0) {
-//       return res.status(400).json({
-//         message: 'Aucun article à enregistrer',
-//       });
-//     }
-
-//     const normalizedPayload = payload
-//       .map((item: any) => ({
-//         codeSageX3: item?.codeSageX3 ? String(item.codeSageX3).trim() : null,
-//         codeSage100: item?.codeSage100 ? String(item.codeSage100).trim() : null,
-//         designation: item?.designation ? String(item.designation).trim() : '',
-//         plannedQuantity:
-//           item?.plannedQuantity !== undefined && item?.plannedQuantity !== null
-//             ? Number(item.plannedQuantity)
-//             : null,
-//         quantityAtCreation:
-//           item?.quantityAtCreation !== undefined && item?.quantityAtCreation !== null
-//             ? Number(item.quantityAtCreation)
-//             : 0,
-//         quantityAtStart:
-//           item?.quantityAtStart !== undefined && item?.quantityAtStart !== null
-//             ? Number(item.quantityAtStart)
-//             : null,
-//         currentQuantity:
-//           item?.currentQuantity !== undefined && item?.currentQuantity !== null
-//             ? Number(item.currentQuantity)
-//             : 0,
-//         quantityAtClosure:
-//           item?.quantityAtClosure !== undefined && item?.quantityAtClosure !== null
-//             ? Number(item.quantityAtClosure)
-//             : null,
-//       }))
-//       .filter((item: any) => item.codeSageX3 || item.codeSage100);
-
-//     if (normalizedPayload.length === 0) {
-//       return res.status(400).json({
-//         message: 'Aucun article valide à enregistrer',
-//       });
-//     }
-
-//     const existingArticles = await prisma.article.findMany({
-//       where: { campaignId },
-//       select: {
-//         id: true,
-//         codeSageX3: true,
-//         codeSage100: true,
-//       },
-//     });
-
-//     const existingX3 = new Set(
-//       existingArticles
-//         .map((a) => (a.codeSageX3 ? String(a.codeSageX3).trim() : null))
-//         .filter(Boolean)
-//     );
-
-//     const existing100 = new Set(
-//       existingArticles
-//         .map((a) => (a.codeSage100 ? String(a.codeSage100).trim() : null))
-//         .filter(Boolean)
-//     );
-
-//     const seenX3 = new Set<string>();
-//     const seen100 = new Set<string>();
-
-//     const articlesToCreate = normalizedPayload.filter((item: any) => {
-//       const x3 = item.codeSageX3;
-//       const s100 = item.codeSage100;
-
-//       if (x3 && existingX3.has(x3)) return false;
-//       if (s100 && existing100.has(s100)) return false;
-
-//       if (x3 && seenX3.has(x3)) return false;
-//       if (s100 && seen100.has(s100)) return false;
-
-//       if (x3) seenX3.add(x3);
-//       if (s100) seen100.add(s100);
-
-//       return true;
-//     });
-
-//     if (articlesToCreate.length === 0) {
-//       return res.status(200).json({
-//         success: true,
-//         message: 'Tous les articles existent déjà dans cette campagne',
-//         createdCount: 0,
-//         skippedCount: normalizedPayload.length,
-//         createdArticles: [],
-//       });
-//     }
-
-//     const createdArticles = await prisma.$transaction(
-//       articlesToCreate.map((item: any) =>
-//         prisma.article.create({
-//           data: {
-//             campaignId,
-//             codeSageX3: item.codeSageX3,
-//             codeSage100: item.codeSage100,
-//             designation: item.designation || '',
-//             plannedQuantity: item.plannedQuantity,
-//             quantityAtCreation: item.quantityAtCreation,
-//             quantityAtStart: item.quantityAtStart,
-//             currentQuantity: item.currentQuantity,
-//             quantityAtClosure: item.quantityAtClosure,
-//           },
-//         })
-//       )
-//     );
-
-//     console.log('createdArticles:', createdArticles);
-
-//     return res.status(201).json({
-//       success: true,
-//       message: 'Articles enregistrés avec succès',
-//       createdCount: createdArticles.length,
-//       skippedCount: normalizedPayload.length - createdArticles.length,
-//       createdArticles,
-//     });
-//   } catch (error) {
-//     console.error('Bulk articles error:', error);
-//     next(error);
-//   }
-// });
-
-
-/**
- * Enregistrer plusieurs articles dans la campagne
- */
 router.post('/:id/articles/bulk', requireAuth, async (req, res, next) => {
   try {
     const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    if (!currentUser.role?.canManageCampaignArticles) {
+      return res.status(403).json({ message: 'Accès refusé : gestion des articles non autorisée' });
+    }
+
     const rawCampaignId = req.params.id;
     const campaignId = toValidNumber(rawCampaignId, 'campaignId');
 
-    if (!r.user?.userId) {
-      return res.status(401).json({
-        message: 'Utilisateur non authentifié',
-      });
+    const campaign = await getCampaignOr404(campaignId, res);
+    if (!campaign) return;
+
+    if (!canEditCampaign(currentUser, campaign.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette campagne' });
     }
 
-    const currentUserId = Number(r.user.userId);
+    const currentUserId = Number(currentUser.id);
 
     console.log('=== BULK ARTICLES START ===');
     console.log('rawCampaignId:', rawCampaignId);
@@ -1001,16 +856,14 @@ router.post('/:id/articles/bulk', requireAuth, async (req, res, next) => {
     console.log('currentUserId:', currentUserId);
     console.log('req.body:', JSON.stringify(req.body, null, 2));
 
-    const campaign = await prisma.campaign.findUnique({
-      where: { id: campaignId },
-      select: { id: true, name: true },
-    });
-
-    if (!campaign) {
-      return res.status(404).json({
-        message: 'Campagne introuvable',
+    if (campaign.status === 'TERMINEE') {
+      return res.status(400).json({
+        message: 'Impossible d’ajouter un article à une campagne terminée',
       });
     }
+
+    const shouldSetQuantityAtStart =
+      campaign.status === 'ACTIVE' || campaign.status === 'EN_PAUSE';
 
     const payload = req.body?.articles;
 
@@ -1113,7 +966,9 @@ router.post('/:id/articles/bulk', requireAuth, async (req, res, next) => {
             designation: item.designation || '',
             plannedQuantity: item.plannedQuantity,
             quantityAtCreation: item.quantityAtCreation,
-            quantityAtStart: item.quantityAtStart,
+            quantityAtStart: shouldSetQuantityAtStart
+              ? item.quantityAtCreation
+              : null,
             currentQuantity: item.currentQuantity,
             quantityAtClosure: item.quantityAtClosure,
             campaign: {
@@ -1147,6 +1002,22 @@ router.post('/:id/articles/bulk', requireAuth, async (req, res, next) => {
  */
 router.delete('/:id/articles/:articleId', requireAuth, async (req, res, next) => {
   try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    if (!currentUser.role?.canManageCampaignArticles) {
+      return res.status(403).json({ message: 'Accès refusé : gestion des articles non autorisée' });
+    }
+
+    const campaignId = toValidNumber(req.params.id, 'campaignId');
+    const campaignOwnership = await getCampaignOr404(campaignId, res);
+    if (!campaignOwnership) return;
+
+    if (!canEditCampaign(currentUser, campaignOwnership.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette campagne' });
+    }
+
     await prisma.article.delete({
       where: {
         id: Number(req.params.articleId),
@@ -1158,6 +1029,5 @@ router.delete('/:id/articles/:articleId', requireAuth, async (req, res, next) =>
     next(error);
   }
 });
-
 
 export default router;
