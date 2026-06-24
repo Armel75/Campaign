@@ -53,8 +53,3 @@ A full-stack marketing campaign management application built with a monorepo arc
 - **Lead Tracking**: Manage leads and conversions.
 - **Task Management**: Assign tasks to users.
 - **Financials**: Track expenses and budgets.
-
-## Default Credentials
-
-- **Username**: admin
-- **Password**: admin123
