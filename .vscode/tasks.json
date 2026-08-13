@@ -1,0 +1,36 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Test Port 51269",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"test_port.js"
+			]
+		},
+		{
+			"label": "Check Ports",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"check_port.js"
+			]
+		},
+		{
+			"label": "Cleanup Test Files",
+			"type": "shell",
+			"command": "del /f /q \"C:\\Users\\DEFFO_A\\Lovable_Project\\Campaign\\test_port.js\" \"C:\\Users\\DEFFO_A\\Lovable_Project\\Campaign\\test_port.cmd\" \"C:\\Users\\DEFFO_A\\Lovable_Project\\Campaign\\check_port.js\" \"C:\\Users\\DEFFO_A\\Lovable_Project\\Campaign\\resultat_test.txt\" \"C:\\Users\\DEFFO_A\\Lovable_Project\\Campaign\\port_check.txt\""
+		},
+		{
+			"label": "Cleanup Test Files",
+			"type": "shell",
+			"command": "Remove-Item -Path \"C:\\Users\\DEFFO_A\\Lovable_Project\\Campaign\\test_port.js\", \"C:\\Users\\DEFFO_A\\Lovable_Project\\Campaign\\test_port.cmd\", \"C:\\Users\\DEFFO_A\\Lovable_Project\\Campaign\\check_port.js\", \"C:\\Users\\DEFFO_A\\Lovable_Project\\Campaign\\resultat_test.txt\", \"C:\\Users\\DEFFO_A\\Lovable_Project\\Campaign\\port_check.txt\" -Force"
+		},
+		{
+			"label": "Clean Test Files",
+			"type": "shell",
+			"command": "Remove-Item 'C:\\Users\\DEFFO_A\\Lovable_Project\\Campaign\\test_port.js','C:\\Users\\DEFFO_A\\Lovable_Project\\Campaign\\test_port.cmd','C:\\Users\\DEFFO_A\\Lovable_Project\\Campaign\\check_port.js','C:\\Users\\DEFFO_A\\Lovable_Project\\Campaign\\resultat_test.txt','C:\\Users\\DEFFO_A\\Lovable_Project\\Campaign\\port_check.txt' -Force"
+		}
+	]
+}

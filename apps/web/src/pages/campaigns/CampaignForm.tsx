@@ -17,17 +17,19 @@ import {
   CommandList,
 } from '@/components/ui/command';
 import { Badge } from '@/components/ui/badge';
-import { Check, ChevronsUpDown, X } from 'lucide-react';
+import { Check, ChevronsUpDown, X, Lock } from 'lucide-react';
 
 type Option = { id: number; name: string };
 
 type CampaignFormValues = {
   name: string;
   description: string;
+  strategy: string;
   objectiveId: string;
   startDate: string;
   endDate: string;
   status: string;
+  totalBudget: string;
   channelIds: number[];
   targetAudienceIds: number[];
 };
@@ -38,12 +40,14 @@ function MultiSelect({
   options,
   selectedIds,
   onChange,
+  disabled = false,
 }: {
   labelId: string;
   placeholder: string;
   options: Option[];
   selectedIds: number[];
   onChange: (next: number[]) => void;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -54,22 +58,25 @@ function MultiSelect({
   );
 
   const toggle = (id: number) => {
+    if (disabled) return;
     const has = selectedSet.has(id);
     const next = has ? selectedIds.filter((x) => x !== id) : [...selectedIds, id];
     onChange(next);
   };
 
   const remove = (id: number) => {
+    if (disabled) return;
     onChange(selectedIds.filter((x) => x !== id));
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={disabled ? false : open} onOpenChange={disabled ? undefined : setOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
           aria-controls={labelId}
-          className="flex min-h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          disabled={disabled}
+          className="flex min-h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <div className="flex flex-1 flex-wrap gap-2">
             {selectedOptions.length === 0 ? (
@@ -82,26 +89,28 @@ function MultiSelect({
                   className="flex items-center gap-2 px-2 py-1"
                 >
                   <span className="max-w-[260px] truncate">{opt.name}</span>
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      remove(opt.id);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
+                  {!disabled && (
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
                         remove(opt.id);
-                      }
-                    }}
-                    className="rounded-sm p-0.5 hover:bg-muted cursor-pointer"
-                    aria-label={`Remove ${opt.name}`}
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </span>
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          remove(opt.id);
+                        }
+                      }}
+                      className="rounded-sm p-0.5 hover:bg-muted cursor-pointer"
+                      aria-label={`Remove ${opt.name}`}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </span>
+                  )}
                 </Badge>
               ))
             )}
@@ -143,10 +152,12 @@ export default function CampaignForm() {
     defaultValues: {
       name: '',
       description: '',
+      strategy: '',
       objectiveId: '',
       startDate: '',
       endDate: '',
       status: 'BROUILLON',
+      totalBudget: '',
       channelIds: [],
       targetAudienceIds: [],
     },
@@ -160,6 +171,7 @@ export default function CampaignForm() {
   const [channels, setChannels] = useState<any[]>([]);
   const [targetAudiences, setTargetAudiences] = useState<any[]>([]);
   const [attachments, setAttachments] = useState<File[]>([]);
+  const [isCompletedCampaign, setIsCompletedCampaign] = useState(false);
 
   const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>([]);
   const [selectedTargetAudienceIds, setSelectedTargetAudienceIds] = useState<number[]>([]);
@@ -183,10 +195,14 @@ export default function CampaignForm() {
 
       setValue('name', data.name ?? '');
       setValue('description', data.description ?? '');
+      setValue('strategy', data.strategy ?? '');
       setValue('objectiveId', String(data.objectiveId ?? ''));
       setValue('startDate', data.startDate ? data.startDate.split('T')[0] : '');
       setValue('endDate', data.endDate ? data.endDate.split('T')[0] : '');
       setValue('status', data.status ?? 'BROUILLON');
+      setValue('totalBudget', data.totalBudget ?? '');
+
+      setIsCompletedCampaign(data.status === 'TERMINEE');
 
       const chIds: number[] = Array.isArray(data.channels)
         ? data.channels.map((c: any) => Number(c.channelId))
@@ -211,11 +227,17 @@ export default function CampaignForm() {
       } else {
         setValue('channelIds', []);
         setValue('targetAudienceIds', []);
+        setIsCompletedCampaign(false);
       }
     })();
   }, [id, isEdit, setValue]);
 
   const onFilesSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isCompletedCampaign) {
+      e.target.value = '';
+      return;
+    }
+
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
@@ -237,27 +259,30 @@ export default function CampaignForm() {
   };
 
   const removeAttachment = (index: number) => {
+    if (isCompletedCampaign) return;
     setAttachments((prev) => prev.filter((_, i) => i !== index));
   };
 
   const onSubmit = async (data: CampaignFormValues) => {
     try {
+      if (isEdit && isCompletedCampaign) {
+        alert('Impossible de modifier une campagne terminée.');
+        return;
+      }
+
       const formData = new FormData();
 
       formData.append('name', data.name);
       formData.append('description', data.description || '');
+      formData.append('strategy', data.strategy || '');
       formData.append('objectiveId', String(data.objectiveId));
       formData.append('startDate', data.startDate);
       formData.append('endDate', data.endDate);
       formData.append('status', data.status);
+      formData.append('totalBudget', data.totalBudget || '0');
 
-      selectedChannelIds.forEach((channelId) => {
-        formData.append('channelIds', String(channelId));
-      });
-
-      selectedTargetAudienceIds.forEach((targetAudienceId) => {
-        formData.append('targetAudienceIds', String(targetAudienceId));
-      });
+      formData.append('channelIds', JSON.stringify(selectedChannelIds));
+      formData.append('targetAudienceIds', JSON.stringify(selectedTargetAudienceIds));
 
       attachments.forEach((file) => {
         formData.append('attachments', file, file.name);
@@ -270,28 +295,18 @@ export default function CampaignForm() {
         console.log('formData entry =', key, value);
       }
 
-      const token = localStorage.getItem('accessToken');
-      const baseUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:3004/api/v1';
-      const url = isEdit ? `${baseUrl}/campaigns/${id}` : `${baseUrl}/campaigns`;
+      const response = isEdit
+        ? await api.put(`/campaigns/${id}`, formData)
+        : await api.post('/campaigns', formData);
 
-      const response = await fetch(url, {
-        method: isEdit ? 'PUT' : 'POST',
-        body: formData,
-        credentials: 'include',
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      });
-
-      const responseText = await response.text();
       console.log('submit response status =', response.status);
-      console.log('submit response body =', responseText);
-
-      if (!response.ok) {
-        throw new Error(responseText || "Erreur lors de l'enregistrement de la campagne");
-      }
+      console.log('submit response body =', response.data);
 
       navigate('/campaigns');
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
+      console.log('submit response status =', error?.response?.status);
+      console.log('submit response body =', error?.response?.data);
       alert("Erreur lors de l'enregistrement de la campagne");
     }
   };
@@ -309,14 +324,23 @@ export default function CampaignForm() {
   return (
     <Card className="max-w-2xl mx-auto">
       <CardHeader>
-        <CardTitle>{isEdit ? 'Edit Campaign' : 'Create Campaign'}</CardTitle>
+        <CardTitle>{isEdit ? 'Modification Campagne' : 'Création Campagne'}</CardTitle>
       </CardHeader>
 
       <CardContent>
+        {isEdit && isCompletedCampaign && (
+          <div className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+            <div className="flex items-start gap-2">
+              <Lock className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>Cette campagne est terminée. La modification est désactivée.</span>
+            </div>
+          </div>
+        )}
+
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="name">Name</Label>
-            <Input id="name" {...register('name', { required: true })} />
+            <Label htmlFor="name">Nom <span className="text-red-500">*</span></Label>
+            <Input id="name" {...register('name', { required: true })} disabled={isCompletedCampaign} />
           </div>
 
           <div className="space-y-2">
@@ -325,16 +349,30 @@ export default function CampaignForm() {
               id="description"
               rows={3}
               {...register('description')}
-              className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              disabled={isCompletedCampaign}
+              className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="objectiveId">Objective</Label>
+            <Label htmlFor="strategy">Stratégie</Label>
+            <textarea
+              id="strategy"
+              rows={4}
+              {...register('strategy')}
+              disabled={isCompletedCampaign}
+              placeholder="Décrivez votre stratégie marketing pour cette campagne…"
+              className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="objectiveId">Objectif <span className="text-red-500">*</span></Label>
             <select
               id="objectiveId"
               {...register('objectiveId', { required: true })}
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              disabled={isCompletedCampaign}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <option value="">Select Objective</option>
               {objectives.map((obj) => (
@@ -347,22 +385,39 @@ export default function CampaignForm() {
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="startDate">Start Date</Label>
-              <Input id="startDate" type="date" {...register('startDate', { required: true })} />
+              <Label htmlFor="startDate">Date Début campagne <span className="text-red-500">*</span></Label>
+              <Input id="startDate" type="date" {...register('startDate', { required: true })} disabled={isCompletedCampaign} />
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="endDate">End Date</Label>
-              <Input id="endDate" type="date" {...register('endDate', { required: true })} />
+              <Label htmlFor="endDate">Date Fin campagne <span className="text-red-500">*</span></Label>
+              <Input id="endDate" type="date" {...register('endDate', { required: true })} disabled={isCompletedCampaign} />
             </div>
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="status">Status</Label>
+            <Label htmlFor="totalBudget">Budget total (FCFA) | Tout budget erroné est passible de sanction.<span className="text-red-500">*</span></Label>
+            <Input
+              id="totalBudget"
+              type="number"
+              min="0"
+              step="1"
+              placeholder="0"
+              {...register('totalBudget', { required: true })}
+              disabled={isCompletedCampaign}
+            />
+            <p className="text-xs text-muted-foreground/70 italic">
+              Tout budget erroné est passible de sanction.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="status">Status <span className="text-red-500">*</span></Label>
             <select
               id="status"
               {...register('status', { required: true })}
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              disabled={isCompletedCampaign}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <option value="BROUILLON">BROUILLON (campagne en préparation)</option>
               <option value="PLANIFIEE">PLANIFIEE (prête mais pas encore lancée)</option>
@@ -373,12 +428,13 @@ export default function CampaignForm() {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="channelIds">Channel</Label>
+            <Label htmlFor="channelIds">Canal de communication</Label>
             <MultiSelect
               labelId="channelIds"
-              placeholder="Choisir un ou plusieurs channels..."
+              placeholder="Choisir un ou plusieurs Canal..."
               options={channelOptions}
               selectedIds={selectedChannelIds}
+              disabled={isCompletedCampaign}
               onChange={(next) => {
                 setSelectedChannelIds(next);
                 setValue('channelIds', next);
@@ -387,12 +443,13 @@ export default function CampaignForm() {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="targetAudienceIds">Target Audience</Label>
+            <Label htmlFor="targetAudienceIds">Audience Cible</Label>
             <MultiSelect
               labelId="targetAudienceIds"
               placeholder="Choisir une ou plusieurs audiences..."
               options={targetAudienceOptions}
               selectedIds={selectedTargetAudienceIds}
+              disabled={isCompletedCampaign}
               onChange={(next) => {
                 setSelectedTargetAudienceIds(next);
                 setValue('targetAudienceIds', next);
@@ -401,8 +458,8 @@ export default function CampaignForm() {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="attachments">Attachments</Label>
-            <Input id="attachments" type="file" multiple onChange={onFilesSelected} />
+            <Label htmlFor="attachments">Pièce(s) jointe(s)</Label>
+            <Input id="attachments" type="file" multiple onChange={onFilesSelected} disabled={isCompletedCampaign} />
 
             {attachments.length > 0 && (
               <div className="mt-2 space-y-2">
@@ -417,8 +474,9 @@ export default function CampaignForm() {
                       variant="outline"
                       className="h-8 px-2"
                       onClick={() => removeAttachment(index)}
+                      disabled={isCompletedCampaign}
                     >
-                      Remove
+                      Supprimer
                     </Button>
                   </div>
                 ))}
@@ -428,9 +486,11 @@ export default function CampaignForm() {
 
           <div className="flex justify-end gap-4 pt-4">
             <Button type="button" variant="outline" onClick={() => navigate('/campaigns')}>
-              Cancel
+              Annuler
             </Button>
-            <Button type="submit">Save Campaign</Button>
+            <Button type="submit" disabled={isEdit && isCompletedCampaign}>
+              Enregistrer Campagne
+            </Button>
           </div>
         </form>
       </CardContent>

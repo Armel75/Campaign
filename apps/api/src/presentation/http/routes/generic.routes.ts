@@ -1,8 +1,26 @@
 import { Router } from 'express';
 import prisma from '../../../infrastructure/prisma/client';
-import { requireAuth } from '../middlewares/auth';
+import { requireAuth, AuthRequest } from '../middlewares/auth';
+import {
+  requirePermission,
+  requireAnyPermission,
+  type PermissionKey,
+} from '../middlewares/permissions';
 
-// A generic CRUD generator for simple resources
+const modelPermissions: Partial<Record<string, PermissionKey>> = {
+  task: 'canViewTasks',
+  lead: 'canViewLeads',
+  expense: 'canViewExpenses',
+  user: 'canManageUsers',
+  role: 'canManageRoles',
+};
+
+const modelAnyPermissions: Partial<Record<string, PermissionKey[]>> = {
+  objective: ['canCreateCampaign', 'canViewObjectives'],
+  channel: ['canCreateCampaign', 'canViewSettings'],
+  targetAudience: ['canCreateCampaign', 'canViewSettings'],
+};
+
 export default (modelName: string) => {
   const router = Router();
   const model = (prisma as any)[modelName];
@@ -16,19 +34,29 @@ export default (modelName: string) => {
     return Number.isNaN(numericId) ? id : numericId;
   };
 
-  router.get('/', requireAuth, async (req, res, next) => {
+  const permission = modelPermissions[modelName];
+  const anyPermissions = modelAnyPermissions[modelName];
+
+  const withModelPermission = anyPermissions
+    ? [requireAuth, requireAnyPermission(anyPermissions)]
+    : permission
+      ? [requireAuth, requirePermission(permission)]
+      : [requireAuth];
+
+  router.get('/', ...withModelPermission, async (_req, res, next) => {
     try {
       const items = await model.findMany({
         orderBy: { updatedAt: 'desc' },
-        take: 100, // Safety limit
+        take: 100,
       });
+
       res.json({ data: items });
     } catch (error) {
       next(error);
     }
   });
 
-  router.get('/:id', requireAuth, async (req, res, next) => {
+  router.get('/:id', ...withModelPermission, async (req, res, next) => {
     try {
       const item = await model.findUnique({
         where: { id: parseId(req.params.id) },
@@ -44,16 +72,17 @@ export default (modelName: string) => {
     }
   });
 
-  router.post('/', requireAuth, async (req: any, res, next) => {
+  router.post('/', ...withModelPermission, async (req: AuthRequest, res, next) => {
     try {
       const data = { ...req.body };
 
-      // Ajout automatique de createdById pour les modèles qui en ont besoin
       if (
-        ['objective', 'channel', 'targetAudience', 'task', 'lead', 'expense'].includes(modelName) &&
+        ['objective', 'channel', 'targetAudience', 'task', 'lead', 'expense'].includes(
+          modelName
+        ) &&
         !data.createdById
       ) {
-        data.createdById = req.user.userId;
+        data.createdById = Number(req.user!.userId);
       }
 
       const item = await model.create({
@@ -66,7 +95,7 @@ export default (modelName: string) => {
     }
   });
 
-  router.put('/:id', requireAuth, async (req, res, next) => {
+  router.put('/:id', ...withModelPermission, async (req, res, next) => {
     try {
       const item = await model.update({
         where: { id: parseId(req.params.id) },
@@ -79,7 +108,7 @@ export default (modelName: string) => {
     }
   });
 
-  router.delete('/:id', requireAuth, async (req, res, next) => {
+  router.delete('/:id', ...withModelPermission, async (req, res, next) => {
     try {
       await model.delete({
         where: { id: parseId(req.params.id) },

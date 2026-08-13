@@ -4,30 +4,36 @@ import morgan from 'morgan';
 import helmet from 'helmet';
 import routes from './presentation/http/routes';
 import { errorHandler } from './presentation/http/middlewares/errorHandler';
-import 'dotenv/config';
+import path from 'path';
+import dotenv from 'dotenv';
 import { bootstrapAdmin } from './bootstrap/adminBootstrap';
 import cookieParser from 'cookie-parser';
-import { PrismaClient } from '@prisma/client';
-import path from 'path';
+import { startCampaignStockSyncCron } from './cron/campaignStockSync.cron';
+import { startCampaignAutoCloseCron } from './cron/campaignAutoClose.cron';
+import { startGlpiUserSyncCron } from "./cron/glpiUserSync.cron";
+import { startArticleFamilySyncCron } from "./cron/articleFamilySync.cron";
+import { startWeeklySalesReportCron } from './cron/weeklySalesReport.cron';
+import { startCampaignAutoActivateCron } from './cron/campaignAutoActivate.cron';
+import { UPLOADS_ROOT_DIR, ensureUploadsDirectories } from './infrastructure/files/uploads';
 
-const prisma = new PrismaClient();
+// Charge l'env depuis prisma/.env (fichier unique, partagé avec Prisma CLI)
+dotenv.config({ path: path.join(__dirname, '..', 'prisma', '.env') });
+
 const app = express();
-
 const PORT = process.env.PORT || 3004;
 
 app.use(helmet());
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(
-  '/uploads',
-  express.static(path.resolve(__dirname, '../uploads'))
-);
+// Suppression de la création automatique du dossier uploads/campaigns au démarrage
+app.use('/uploads', express.static(UPLOADS_ROOT_DIR));
 app.use(cookieParser());
 
 const WEB_ORIGINS = (process.env.WEB_ORIGIN ?? 'http://localhost:5173')
   .split(',')
-  .map((s) => s.trim());
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 app.use(
   cors({
@@ -41,61 +47,32 @@ app.use(
       return callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
-  })
+  }),
 );
 
 app.use('/api/v1', routes);
 
-app.get('/health', (req, res) => {
+app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date() });
 });
 
 app.use(errorHandler);
 
-async function ensureSuperAdminRole() {
-  if (process.env.BOOTSTRAP_ENABLED !== 'true') return;
-
-  const roleName = process.env.BOOTSTRAP_ADMIN_ROLE || 'SUPER_ADMIN';
-
-  await prisma.role.upsert({
-    where: { name: roleName },
-    update: {
-      canViewAllCampaigns: true,
-      canEditAllCampaigns: true,
-      canDeleteAllCampaigns: true,
-      canCreateCampaign: true,
-      canManageTasks: true,
-      canAssignTasks: true,
-      canManageCampaignArticles: true,
-      canManageAttachments: true,
-      canExportCampaign: true,
-      canManageUsers: true,
-      canManageRoles: true,
-    },
-    create: {
-      name: roleName,
-      canViewAllCampaigns: true,
-      canEditAllCampaigns: true,
-      canDeleteAllCampaigns: true,
-      canCreateCampaign: true,
-      canManageTasks: true,
-      canAssignTasks: true,
-      canManageCampaignArticles: true,
-      canManageAttachments: true,
-      canExportCampaign: true,
-      canManageUsers: true,
-      canManageRoles: true,
-    },
-  });
-
-  console.log(`Role ${roleName} ensured with full permissions`);
-}
-
 async function start() {
-  await ensureSuperAdminRole();
   await bootstrapAdmin();
 
-  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    startCampaignStockSyncCron();
+    startCampaignAutoCloseCron();
+    startGlpiUserSyncCron();
+    startArticleFamilySyncCron();
+    startWeeklySalesReportCron();
+    startCampaignAutoActivateCron();
+  });
 }
 
-start();
+start().catch((error) => {
+  console.error('Server startup failed:', error);
+  process.exit(1);
+});

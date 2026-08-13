@@ -33,6 +33,15 @@ interface RoleFormValues {
   canManageUsers: boolean;
   canManageRoles: boolean;
   canExportCampaign: boolean;
+
+  canViewDashboard: boolean;
+  canViewStrategicDashboard: boolean;
+  canViewCampaigns: boolean;
+  canViewObjectives: boolean;
+  canViewTasks: boolean;
+  canViewLeads: boolean;
+  canViewExpenses: boolean;
+  canViewSettings: boolean;
 }
 
 export default function RoleForm() {
@@ -61,6 +70,15 @@ export default function RoleForm() {
       canManageUsers: false,
       canManageRoles: false,
       canExportCampaign: false,
+
+      canViewDashboard: false,
+      canViewStrategicDashboard: false,
+      canViewCampaigns: false,
+      canViewObjectives: false,
+      canViewTasks: false,
+      canViewLeads: false,
+      canViewExpenses: false,
+      canViewSettings: false,
     },
   });
 
@@ -91,6 +109,15 @@ export default function RoleForm() {
         setValue("canManageUsers", !!role.canManageUsers);
         setValue("canManageRoles", !!role.canManageRoles);
         setValue("canExportCampaign", !!role.canExportCampaign);
+
+        setValue("canViewDashboard", !!role.canViewDashboard);
+        setValue("canViewStrategicDashboard", !!role.canViewStrategicDashboard);
+        setValue("canViewCampaigns", !!role.canViewCampaigns);
+        setValue("canViewObjectives", !!role.canViewObjectives);
+        setValue("canViewTasks", !!role.canViewTasks);
+        setValue("canViewLeads", !!role.canViewLeads);
+        setValue("canViewExpenses", !!role.canViewExpenses);
+        setValue("canViewSettings", !!role.canViewSettings);
       } catch (error) {
         console.error(error);
       } finally {
@@ -299,6 +326,94 @@ export default function RoleForm() {
                   <Label htmlFor="canExportCampaign">
                     Can export campaign
                   </Label>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <h3 className="text-sm font-semibold">UI visibility</h3>
+
+              <div className="space-y-3 rounded-lg border p-4">
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="canViewDashboard"
+                    {...register("canViewDashboard")}
+                    className="h-4 w-4"
+                  />
+                  <Label htmlFor="canViewDashboard">Can view dashboard</Label>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="canViewStrategicDashboard"
+                    {...register("canViewStrategicDashboard")}
+                    className="h-4 w-4"
+                  />
+                  <Label htmlFor="canViewStrategicDashboard">
+                    Can view strategic dashboard
+                  </Label>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="canViewCampaigns"
+                    {...register("canViewCampaigns")}
+                    className="h-4 w-4"
+                  />
+                  <Label htmlFor="canViewCampaigns">Can view campaigns</Label>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="canViewObjectives"
+                    {...register("canViewObjectives")}
+                    className="h-4 w-4"
+                  />
+                  <Label htmlFor="canViewObjectives">Can view objectives</Label>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="canViewTasks"
+                    {...register("canViewTasks")}
+                    className="h-4 w-4"
+                  />
+                  <Label htmlFor="canViewTasks">Can view tasks</Label>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="canViewLeads"
+                    {...register("canViewLeads")}
+                    className="h-4 w-4"
+                  />
+                  <Label htmlFor="canViewLeads">Can view leads</Label>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="canViewExpenses"
+                    {...register("canViewExpenses")}
+                    className="h-4 w-4"
+                  />
+                  <Label htmlFor="canViewExpenses">Can view expenses</Label>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="canViewSettings"
+                    {...register("canViewSettings")}
+                    className="h-4 w-4"
+                  />
+                  <Label htmlFor="canViewSettings">Can view settings</Label>
                 </div>
               </div>
             </div>

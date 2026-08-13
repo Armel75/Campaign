@@ -11,31 +11,36 @@ datasource db {
 }
 
 model User {
-  id                      Int    @id @default(autoincrement())
-  username                String    @unique
-  email                   String    @unique
-  passwordHash            String    @map("password_hash")
-  roleId                  Int    @map("role_id")
-  role                    Role      @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  createdAt               DateTime  @default(now()) @map("created_at")
-  updatedAt               DateTime  @updatedAt @map("updated_at")
-  refreshSessions         RefreshSession[]
-  // Relations
-  createdCampaigns        Campaign[]
-  tasks                   Task[]
-  createdBudgetPlans      BudgetPlan[]
-  createdBudgetLines      BudgetLine[]
-  createdObjectives       Objective[]
-  createdTargetAudiences  TargetAudience[]
-  createdChannels         Channel[]
-  createdCampaignMetrics  CampaignMetric[]
-  createdLeads            Lead[]
-  createdConversions      Conversion[]
-  createdTasks            Task[] @relation("TaskCreatedBy")
-  createdExpenses         Expense[]
-  createdAttachments      Attachment[]
+  id                        Int      @id @default(autoincrement())
+  matricule                 String   @unique
+  username                  String   @unique
+  email                     String   @unique
+  passwordHash              String   @map("password_hash")
+  firstName                 String
+  lastName                  String
+  roleId                    Int      @map("role_id")
+  isActive                  Boolean  @default(true) @map("is_active")
+  role                      Role     @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdAt                 DateTime @default(now()) @map("created_at")
+  updatedAt                 DateTime @updatedAt @map("updated_at")
+  refreshSessions           RefreshSession[]
+
+  createdCampaigns          Campaign[]
+  createdBudgetPlans        BudgetPlan[]
+  createdBudgetLines        BudgetLine[]
+  createdObjectives         Objective[]
+  createdTargetAudiences    TargetAudience[]
+  createdChannels           Channel[]
+  createdCampaignMetrics    CampaignMetric[]
+  createdConversions        Conversion[]
+  createdExpenses           Expense[]
+  createdAttachments        Attachment[]
   createdCampaignKpiTargets CampaignKpiTarget[]
-  createdArticles         Article[]
+  createdArticles           Article[]
+  createdLeads              Lead[]   @relation("LeadCreatedBy")
+  createdTasks              Task[]   @relation("TaskCreatedBy")
+  createdLeadActivities     LeadActivity[] @relation("LeadActivityCreatedBy")
+  notifications             Notification[]
 
   @@map("users")
 }
@@ -62,6 +67,20 @@ model Role {
   canManageUsers            Boolean @default(false) @map("can_manage_users")
   canManageRoles            Boolean @default(false) @map("can_manage_roles")
   canExportCampaign         Boolean @default(false) @map("can_export_campaign")
+
+  canViewObjectives Boolean @default(false) @map("can_view_objectives")
+  canViewLeads      Boolean @default(false) @map("can_view_leads")
+  canViewExpenses   Boolean @default(false) @map("can_view_expenses")
+  canViewSettings   Boolean @default(false) @map("can_view_settings")
+
+  canViewTasks      Boolean @default(true)  @map("can_view_tasks")
+  canViewDashboard  Boolean @default(true)  @map("can_view_dashboard")
+
+  canViewCampaigns  Boolean @default(false) @map("can_view_campaigns")
+
+  // Strategic dashboard
+  canViewStrategicDashboard Boolean @default(false) @map("can_view_strategic_dashboard")
+
   users     User[]
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -115,11 +134,13 @@ model Campaign {
   id            Int       @id @default(autoincrement())
   name          String
   description   String?
+  strategy      String?   @db.Text
   objectiveId   Int       @map("objective_id")
   startDate     DateTime  @map("start_date")
   endDate       DateTime  @map("end_date")
   status        String
   budgetPlanId  Int?      @map("budget_plan_id")
+  totalBudget   Decimal?  @map("total_budget")
   createdById   Int       @map("created_by")
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
@@ -137,6 +158,8 @@ model Campaign {
   kpiTargets      CampaignKpiTarget[]
   conversions     Conversion[]
   articles        Article[]
+  stockSyncLogs   CampaignStockSyncLog[]
+  leadActivities  LeadActivity[]
 
   @@index([budgetPlanId])
   @@map("campaigns")
@@ -215,56 +238,113 @@ model CampaignMetric {
   @@map("campaign_metrics")
 }
 
+
 model Lead {
-  id          Int       @id @default(autoincrement())
-  campaignId  Int       @map("campaign_id")
-  createdById Int       @map("created_by")
-  campaign    Campaign     @relation(fields: [campaignId], references: [id])
-  createdBy   User         @relation(fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  name        String
-  email       String
-  phone       String?
-  status      String       // NEW, CONTACTED, QUALIFIED, CONVERTED
-  conversions Conversion[]
-  createdAt   DateTime     @default(now()) @map("created_at")
-  updatedAt   DateTime     @updatedAt @map("updated_at")
+  id             Int            @id @default(autoincrement())
+  campaignId     Int            @map("campaign_id")
+  createdById    Int            @map("created_by")
+  assignedToId   Int?           @map("assigned_to")
+
+  name           String
+  email          String?
+  phone          String?
+  status         String         // NOUVEAU, CONTACTE, QUALIFIE, CONVERTI, PERDU, INVALIDE
+
+  notes          String?
+  nextFollowUpAt DateTime?      @map("next_follow_up_at")
+  lastContactAt  DateTime?      @map("last_contact_at")
+  convertedAt    DateTime?      @map("converted_at")
+  lostReason     String?        @map("lost_reason")
+
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  campaign       Campaign       @relation(fields: [campaignId], references: [id])
+  createdBy      User           @relation("LeadCreatedBy", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  assignedTo     GlpiUser?      @relation(fields: [assignedToId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  conversions    Conversion[]
+  tasks          Task[]
+  activities     LeadActivity[]
 
   @@map("leads")
 }
 
 model Conversion {
-  id             Int      @id @default(autoincrement())
-  campaignId     Int      @map("campaign_id")
-  leadId         Int      @map("lead_id")
-  createdById    Int      @map("created_by")
-  amount         Decimal
-  conversionDate DateTime @default(now()) @map("conversion_date")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  id               Int       @id @default(autoincrement())
+  campaignId       Int       @map("campaign_id")
+  leadId           Int       @map("lead_id")
+  createdById      Int       @map("created_by")
 
-  campaign  Campaign @relation(fields: [campaignId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  createdBy User     @relation(fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  type             String    // SALE, APPOINTMENT, REGISTRATION, SUBSCRIPTION, QUOTE_REQUEST
+  status           String    @default("CONFIRMED") // PENDING, CONFIRMED, CANCELLED, REJECTED
+
+  amount           Decimal?  @db.Decimal(18, 2)
+  quantity         Int?
+  reference        String?   @map("reference")
+  notes            String?
+
+  conversionDate   DateTime  @default(now()) @map("conversion_date")
+
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  campaign         Campaign  @relation(fields: [campaignId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  lead             Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  createdBy        User      @relation(fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@map("conversions")
 }
 
+
 model Task {
-  id          Int   @id @default(autoincrement())
-  campaignId  Int   @map("campaign_id")
-  createdById Int   @map("created_by")
-  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  title       String
-  description String?
-  assignedTo  Int?   @map("assigned_to")
-  assignee    User?     @relation(fields: [assignedTo], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  createdBy   User      @relation("TaskCreatedBy", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  dueDate     DateTime @map("due_date")
-  status      String   // TODO, IN_PROGRESS, DONE
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id           Int       @id @default(autoincrement())
+  campaignId   Int       @map("campaign_id")
+  leadId       Int?      @map("lead_id")
+  assignedToId Int?      @map("assigned_to")
+  createdById  Int       @map("created_by")
+
+  title        String
+  description  String?
+  status       String    @default("A_FAIRE") // A_FAIRE, EN_COURS, TERMINE, ANNULE
+  priority     String    @default("MOYENNE") // FAIBLE, MOYENNE, ELEVEE, URGENTE
+
+  dueDate      DateTime? @map("due_date")
+  completedAt  DateTime? @map("completed_at")
+
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  campaign     Campaign  @relation(fields: [campaignId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  lead         Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  assignedTo   GlpiUser? @relation(fields: [assignedToId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdBy    User      @relation("TaskCreatedBy", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@map("tasks")
+}
+
+model LeadActivity {
+  id            Int      @id @default(autoincrement())
+  leadId        Int      @map("lead_id")
+  campaignId    Int      @map("campaign_id")
+  createdById   Int      @map("created_by")
+
+  type          String   // CREATION, CHANGEMENT_STATUT, NOTE, APPEL, EMAIL, WHATSAPP, TACHE_CREEE, RELANCE, CONVERSION, PERDU, REASSIGNATION
+  title         String
+  description   String?
+
+  oldValue      String?  @map("old_value")
+  newValue      String?  @map("new_value")
+
+  activityDate  DateTime @default(now()) @map("activity_date")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  lead          Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  campaign      Campaign @relation(fields: [campaignId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdBy     User     @relation("LeadActivityCreatedBy", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("lead_activities")
 }
 
 model Expense {
@@ -334,6 +414,22 @@ model RefreshSession {
   @@index([expiresAt])
 }
 
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  type      String   // CAMPAIGN_AUTO_CLOSED, CAMPAIGN_ENDING_SOON, CAMPAIGN_OVERDUE
+  title     String
+  message   String
+  link      String?  // lien vers la ressource (ex: /campaigns/123)
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
 model CampaignTargetAudience {
   id               Int      @id @default(autoincrement())
   campaignId       Int      @map("campaign_id")
@@ -361,12 +457,55 @@ model Article {
   quantityAtStart    Int?     @map("quantity_at_start")
   currentQuantity    Int?     @map("current_quantity")
   quantityAtClosure  Int?     @map("quantity_at_closure")
+  soldQuantity       Int?     @map("sold_quantity")
 
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
-
+  lastSyncAt         DateTime? @map("last_sync_at") 
   campaign           Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   createdBy          User     @relation(fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@map("articles")
+}
+
+model CampaignStockSyncLog {
+  id         Int      @id @default(autoincrement())
+  campaignId Int      @map("campaign_id")
+
+  status     String   @default("RUNNING")
+
+  startedAt  DateTime @default(now()) @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+
+  message    String?
+
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@map("campaign_stock_sync_logs")
+}
+
+model ArticleFamily {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("article_families")
+}
+
+model GlpiUser {
+  id          Int      @id @default(autoincrement())
+  glpiUserId  Int      @unique @map("glpi_user_id")
+  name        String
+  username    String?
+  email       String?
+  isActive    Boolean  @default(true) @map("is_active")
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  assignedLeads Lead[]
+  assignedTasks Task[]
+
+  @@map("glpi_users")
 }

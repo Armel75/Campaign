@@ -3,9 +3,41 @@ import bcrypt from "bcrypt";
 
 const prisma = new PrismaClient();
 
+const fullPermissions = {
+  // Campaign permissions
+  canViewAllCampaigns: true,
+  canEditAllCampaigns: true,
+  canDeleteAllCampaigns: true,
+  canCreateCampaign: true,
+
+  // Tasks
+  canManageTasks: true,
+  canAssignTasks: true,
+
+  // Campaign content
+  canManageCampaignArticles: true,
+  canManageAttachments: true,
+
+  // Administration
+  canManageUsers: true,
+  canManageRoles: true,
+  canExportCampaign: true,
+
+  // UI visibility permissions
+  canViewDashboard: true,
+  canViewStrategicDashboard: true,
+  canViewCampaigns: true,
+  canViewObjectives: true,
+  canViewTasks: true,
+  canViewLeads: true,
+  canViewExpenses: true,
+  canViewSettings: true,
+};
+
 export async function bootstrapAdmin() {
   if (String(process.env.BOOTSTRAP_ENABLED).toLowerCase() !== "true") return;
 
+  const roleName = process.env.BOOTSTRAP_ADMIN_ROLE || "SUPER_ADMIN";
   const username = process.env.BOOTSTRAP_ADMIN_USERNAME;
   const password = process.env.BOOTSTRAP_ADMIN_PASSWORD;
   const email = process.env.BOOTSTRAP_ADMIN_EMAIL;
@@ -16,25 +48,19 @@ export async function bootstrapAdmin() {
   }
 
   try {
-    // 1️⃣ Vérifier si le rôle SUPER_ADMIN existe
-    let role = await prisma.role.findFirst({
-      where: { name: "SUPER_ADMIN" },
+    const role = await prisma.role.upsert({
+      where: { name: roleName },
+      update: {
+        ...fullPermissions,
+      },
+      create: {
+        name: roleName,
+        ...fullPermissions,
+      },
     });
 
-    // 2️⃣ S'il n'existe pas, le créer
-    if (!role) {
-      role = await prisma.role.create({
-        data: {
-          name: "SUPER_ADMIN",
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        },
-      });
+    console.log(`[BOOTSTRAP] Role ${roleName} ensured with full permissions`);
 
-      console.log("[BOOTSTRAP] Role SUPER_ADMIN created");
-    }
-
-    // 3️⃣ Vérifier si l'utilisateur existe déjà
     const existingUser = await prisma.user.findFirst({
       where: {
         OR: [{ username }, { email }],
@@ -46,18 +72,18 @@ export async function bootstrapAdmin() {
       return;
     }
 
-    // 4️⃣ Hash du mot de passe
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // 5️⃣ Création de l'utilisateur
+
     await prisma.user.create({
       data: {
         username,
         email,
-        passwordHash: hashedPassword, // correspond à password_hash
+        passwordHash: hashedPassword,
         roleId: role.id,
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        matricule: process.env.BOOTSTRAP_ADMIN_MATRICULE || 'ADM001',
+        firstName: process.env.BOOTSTRAP_ADMIN_FIRSTNAME || 'Admin',
+        lastName: process.env.BOOTSTRAP_ADMIN_LASTNAME || 'Principal',
       },
     });
 

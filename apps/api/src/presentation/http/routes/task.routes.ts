@@ -1,0 +1,702 @@
+import { Router } from 'express';
+import prisma from '../../../infrastructure/prisma/client';
+import { requireAuth, AuthRequest } from '../middlewares/auth';
+import { getCurrentUserWithRole } from '../../../services/user.service';
+
+const router = Router();
+
+type CurrentUserWithRole = {
+  id: number;
+  role?: {
+    canViewAllCampaigns?: boolean;
+    canEditAllCampaigns?: boolean;
+    canDeleteAllCampaigns?: boolean;
+    canManageTasks?: boolean;
+    canAssignTasks?: boolean;
+    canViewTasks?: boolean;
+  } | null;
+};
+
+function toValidDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`Invalid date: ${value}`);
+  }
+  return date;
+}
+
+function toValidNumber(value: string | number, fieldName: string) {
+  const num = Number(value);
+  if (!Number.isInteger(num) || num <= 0) {
+    throw new Error(`Invalid ${fieldName}: ${value}`);
+  }
+  return num;
+}
+
+async function getAuthorizedUser(req: AuthRequest, res: any) {
+  if (!req.user?.userId) {
+    res.status(401).json({ message: 'Utilisateur non authentifié' });
+    return null;
+  }
+
+  const currentUser = (await getCurrentUserWithRole(
+    Number(req.user.userId)
+  )) as CurrentUserWithRole | null;
+
+  if (!currentUser) {
+    res.status(401).json({ message: 'Utilisateur introuvable' });
+    return null;
+  }
+
+  return currentUser;
+}
+
+function canAccessOwnTask(
+  currentUser: CurrentUserWithRole,
+  taskCreatedById: number
+) {
+  return currentUser.id === taskCreatedById;
+}
+
+function canViewTask(
+  currentUser: CurrentUserWithRole,
+  taskCreatedById: number
+) {
+  return (
+    !!currentUser.role?.canViewAllCampaigns ||
+    canAccessOwnTask(currentUser, taskCreatedById)
+  );
+}
+
+function canEditTask(
+  currentUser: CurrentUserWithRole,
+  taskCreatedById: number
+) {
+  return (
+    !!currentUser.role?.canEditAllCampaigns ||
+    canAccessOwnTask(currentUser, taskCreatedById)
+  );
+}
+
+const TASK_STATUS_LABEL_TO_CODE: Record<string, string> = {
+  'À faire': 'A_FAIRE',
+  'A faire': 'A_FAIRE',
+  A_FAIRE: 'A_FAIRE',
+  'En cours': 'EN_COURS',
+  EN_COURS: 'EN_COURS',
+  Terminé: 'TERMINE',
+  Termine: 'TERMINE',
+  TERMINE: 'TERMINE',
+  Annulé: 'ANNULE',
+  Annule: 'ANNULE',
+  ANNULE: 'ANNULE',
+};
+
+const allowedStatuses = ['A_FAIRE', 'EN_COURS', 'TERMINE', 'ANNULE'];
+const allowedPriorities = ['FAIBLE', 'MOYENNE', 'ELEVEE', 'URGENTE'];
+
+function normalizeTaskStatus(status?: string) {
+  if (!status) return 'A_FAIRE';
+  const normalized = TASK_STATUS_LABEL_TO_CODE[String(status).trim()];
+  return normalized || String(status).trim();
+}
+
+// List
+router.get('/', requireAuth, async (req, res, next) => {
+  try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    if (!currentUser.role?.canViewTasks) {
+      return res
+        .status(403)
+        .json({ message: 'Accès refusé : consultation des tâches non autorisée' });
+    }
+
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const status = typeof req.query.status === 'string' ? req.query.status.trim() : '';
+    const priority = typeof req.query.priority === 'string' ? req.query.priority.trim() : '';
+    const pageRaw = typeof req.query.page === 'string' ? req.query.page : undefined;
+    const limitRaw = typeof req.query.limit === 'string' ? req.query.limit : undefined;
+
+    const hasServerQuery =
+      !!search || !!status || !!priority || !!pageRaw || !!limitRaw;
+
+    if (status && !allowedStatuses.includes(status)) {
+      return res.status(400).json({
+        message: 'Statut invalide pour le filtre.',
+      });
+    }
+
+    if (priority && !allowedPriorities.includes(priority)) {
+      return res.status(400).json({
+        message: 'Priorité invalide pour le filtre.',
+      });
+    }
+
+    const page = pageRaw ? Math.max(1, Number(pageRaw)) : 1;
+    const limit = limitRaw ? Math.max(1, Number(limitRaw)) : 10;
+
+    if ((pageRaw && !Number.isInteger(page)) || (limitRaw && !Number.isInteger(limit))) {
+      return res.status(400).json({
+        message: 'Paramètres de pagination invalides.',
+      });
+    }
+
+    const accessFilter = currentUser.role?.canViewAllCampaigns
+      ? {}
+      : {
+        OR: [
+          { createdById: currentUser.id },
+          { assignedToId: currentUser.id },
+        ],
+      };
+
+    const searchFilter = search
+      ? {
+        OR: [
+          {
+            title: {
+              contains: search,
+            },
+          },
+          {
+            description: {
+              contains: search,
+            },
+          },
+          {
+            campaign: {
+              name: {
+                contains: search,
+              },
+            },
+          },
+          {
+            assignedTo: {
+              username: {
+                contains: search,
+              },
+            },
+          },
+          {
+            assignedTo: {
+              name: {
+                contains: search,
+              },
+            },
+          },
+          {
+            createdBy: {
+              username: {
+                contains: search,
+              },
+            },
+          },
+        ],
+      }
+      : {};
+
+    const filters: any[] = [accessFilter];
+
+    if (status) {
+      filters.push({ status });
+    }
+
+    if (priority) {
+      filters.push({ priority });
+    }
+
+    if (search) {
+      filters.push(searchFilter);
+    }
+
+    const whereClause = {
+      AND: filters,
+    };
+
+    if (!hasServerQuery) {
+      const tasks = await prisma.task.findMany({
+        where: whereClause,
+        include: {
+          campaign: {
+            select: {
+              id: true,
+              name: true,
+              description: true,
+              status: true,
+            },
+          },
+          assignedTo: {
+            select: {
+              id: true,
+              username: true,
+              email: true,
+              name: true,
+            },
+          },
+          createdBy: {
+            select: {
+              id: true,
+              username: true,
+              email: true,
+            },
+          },
+        },
+        orderBy: { updatedAt: 'desc' },
+      });
+
+      return res.json({ data: tasks });
+    }
+
+    const [tasks, total] = await Promise.all([
+      prisma.task.findMany({
+        where: whereClause,
+        include: {
+          campaign: {
+            select: {
+              id: true,
+              name: true,
+              description: true,
+              status: true,
+            },
+          },
+          assignedTo: {
+            select: {
+              id: true,
+              username: true,
+              email: true,
+              name: true,
+            },
+          },
+          createdBy: {
+            select: {
+              id: true,
+              username: true,
+              email: true,
+            },
+          },
+        },
+        orderBy: { updatedAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.task.count({
+        where: whereClause,
+      }),
+    ]);
+
+    return res.json({
+      data: tasks,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Get One
+router.get('/:id', requireAuth, async (req, res, next) => {
+  try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    if (!currentUser.role?.canViewTasks) {
+      return res
+        .status(403)
+        .json({ message: 'Accès refusé : consultation des tâches non autorisée' });
+    }
+
+    const taskId = toValidNumber(req.params.id, 'taskId');
+
+    const task = await prisma.task.findUnique({
+      where: { id: taskId },
+      include: {
+        campaign: {
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            status: true,
+          },
+        },
+        assignedTo: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+            name: true,
+          },
+        },
+        createdBy: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    if (!task) {
+      return res.status(404).json({ message: 'Tâche introuvable' });
+    }
+
+    if (!canViewTask(currentUser, task.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette tâche' });
+    }
+
+    res.json({
+      data: {
+        ...task,
+        campaignId: task.campaignId ? String(task.campaignId) : '',
+        assignedTo: task.assignedToId ? String(task.assignedToId) : '',
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Create
+router.post('/', requireAuth, async (req, res, next) => {
+  try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    if (!currentUser.role?.canManageTasks) {
+      return res
+        .status(403)
+        .json({ message: 'Accès refusé : gestion des tâches non autorisée' });
+    }
+
+    const {
+      title,
+      description,
+      assignedTo,
+      dueDate,
+      status,
+      campaignId,
+      priority,
+    } = req.body;
+
+    if (!title || !String(title).trim()) {
+      return res.status(400).json({ message: 'Title is required' });
+    }
+
+    if (!campaignId) {
+      return res.status(400).json({ message: 'La campagne est obligatoire' });
+    }
+
+    const parsedCampaignId = toValidNumber(campaignId, 'campaignId');
+    const campaign = await prisma.campaign.findUnique({
+      where: { id: parsedCampaignId },
+      select: {
+        id: true,
+        createdById: true,
+        name: true,
+        status: true,
+      },
+    });
+
+    if (!campaign) {
+      return res.status(404).json({ message: 'Campagne introuvable' });
+    }
+
+    if (campaign.status === 'TERMINEE') {
+      return res.status(400).json({
+        message: 'Impossible d’ajouter une tâche à une campagne terminée',
+      });
+    }
+
+    if (!canEditTask(currentUser, campaign.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette campagne' });
+    }
+
+    const assignedToId = assignedTo ? toValidNumber(assignedTo, 'assignedTo') : null;
+    const currentUserId = Number(currentUser.id);
+
+    if (
+      assignedToId &&
+      assignedToId !== currentUserId &&
+      !currentUser.role?.canAssignTasks
+    ) {
+      return res
+        .status(403)
+        .json({ message: 'Accès refusé : assignation de tâche non autorisée' });
+    }
+
+    const normalizedStatus = normalizeTaskStatus(status);
+
+    if (!allowedStatuses.includes(normalizedStatus)) {
+      return res.status(400).json({
+        message:
+          "Statut invalide. Valeurs autorisées : 'À faire', 'En cours', 'Terminé', 'Annulé'.",
+      });
+    }
+
+    const task = await prisma.task.create({
+      data: {
+        title: String(title).trim(),
+        description: description ? String(description).trim() : null,
+        dueDate: dueDate ? toValidDate(dueDate) : null,
+        status: normalizedStatus,
+        priority: priority ? String(priority).trim() : 'MOYENNE',
+        campaign: {
+          connect: { id: parsedCampaignId },
+        },
+        createdBy: {
+          connect: { id: currentUserId },
+        },
+        ...(assignedToId
+          ? {
+            assignedTo: {
+              connect: { id: assignedToId },
+            },
+          }
+          : {}),
+      },
+      include: {
+        campaign: {
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            status: true,
+          },
+        },
+        assignedTo: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+            name: true,
+          },
+        },
+        createdBy: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    res.status(201).json({ data: task });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Update
+router.put('/:id', requireAuth, async (req, res, next) => {
+  try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    if (!currentUser.role?.canManageTasks) {
+      return res
+        .status(403)
+        .json({ message: 'Accès refusé : gestion des tâches non autorisée' });
+    }
+
+    const taskId = toValidNumber(req.params.id, 'taskId');
+
+    const existingTask = await prisma.task.findUnique({
+      where: { id: taskId },
+      select: {
+        id: true,
+        createdById: true,
+        campaignId: true,
+      },
+    });
+
+    if (!existingTask) {
+      return res.status(404).json({ message: 'Tâche introuvable' });
+    }
+
+    if (!canEditTask(currentUser, existingTask.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette tâche' });
+    }
+
+    const {
+      title,
+      description,
+      assignedTo,
+      dueDate,
+      status,
+      campaignId,
+      priority,
+    } = req.body;
+
+    if (!title || !String(title).trim()) {
+      return res.status(400).json({ message: 'Title is required' });
+    }
+
+    if (!campaignId) {
+      return res.status(400).json({ message: 'La campagne est obligatoire' });
+    }
+
+    const parsedCampaignId = toValidNumber(campaignId, 'campaignId');
+    const campaign = await prisma.campaign.findUnique({
+      where: { id: parsedCampaignId },
+      select: {
+        id: true,
+        createdById: true,
+        name: true,
+        status: true,
+      },
+    });
+
+    if (!campaign) {
+      return res.status(404).json({ message: 'Campagne introuvable' });
+    }
+
+    if (campaign.status === 'TERMINEE') {
+      return res.status(400).json({
+        message: 'Impossible de modifier une tâche liée à une campagne terminée',
+      });
+    }
+
+    if (!canEditTask(currentUser, campaign.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette campagne' });
+    }
+
+    const assignedToId = assignedTo ? toValidNumber(assignedTo, 'assignedTo') : null;
+    const currentUserId = Number(currentUser.id);
+
+    if (
+      assignedToId &&
+      assignedToId !== currentUserId &&
+      !currentUser.role?.canAssignTasks
+    ) {
+      return res
+        .status(403)
+        .json({ message: 'Accès refusé : assignation de tâche non autorisée' });
+    }
+
+    const normalizedStatus = normalizeTaskStatus(status);
+
+    if (!allowedStatuses.includes(normalizedStatus)) {
+      return res.status(400).json({
+        message:
+          "Statut invalide. Valeurs autorisées : 'À faire', 'En cours', 'Terminé', 'Annulé'.",
+      });
+    }
+
+    const task = await prisma.task.update({
+      where: { id: taskId },
+      data: {
+        title: String(title).trim(),
+        description: description ? String(description).trim() : null,
+        dueDate: dueDate ? toValidDate(dueDate) : null,
+        status: normalizedStatus,
+        priority: priority ? String(priority).trim() : undefined,
+        campaign: {
+          connect: { id: parsedCampaignId },
+        },
+        assignedTo: assignedToId
+          ? {
+            connect: { id: assignedToId },
+          }
+          : {
+            disconnect: true,
+          },
+      },
+      include: {
+        campaign: {
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            status: true,
+          },
+        },
+        assignedTo: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+            name: true,
+          },
+        },
+        createdBy: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    res.json({ data: task });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Delete
+router.delete('/:id', requireAuth, async (req, res, next) => {
+  try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    if (!currentUser.role?.canManageTasks) {
+      return res
+        .status(403)
+        .json({ message: 'Accès refusé : gestion des tâches non autorisée' });
+    }
+
+    const taskId = toValidNumber(req.params.id, 'taskId');
+
+    const existingTask = await prisma.task.findUnique({
+      where: { id: taskId },
+      select: {
+        id: true,
+        createdById: true,
+        campaignId: true,
+      },
+    });
+
+    if (!existingTask) {
+      return res.status(404).json({ message: 'Tâche introuvable' });
+    }
+
+    if (!canEditTask(currentUser, existingTask.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette tâche' });
+    }
+
+    const campaign = await prisma.campaign.findUnique({
+      where: { id: existingTask.campaignId },
+      select: {
+        status: true,
+      },
+    });
+
+    if (campaign?.status === 'TERMINEE') {
+      return res.status(400).json({
+        message: 'Impossible de supprimer une tâche liée à une campagne terminée',
+      });
+    }
+
+    await prisma.task.delete({
+      where: { id: taskId },
+    });
+
+    res.json({ message: 'Tâche supprimée avec succès' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+export default router;

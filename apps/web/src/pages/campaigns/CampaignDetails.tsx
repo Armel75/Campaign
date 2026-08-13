@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
 import api from '@/lib/api';
-
+import { useAuth } from '@/lib/auth';
+import LeadActivityTimeline from '@/components/LeadActivityTimeline';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -18,12 +19,19 @@ import {
   Package,
   Clock,
   TrendingUp,
+  Lock,
+  ExternalLink,
+  BarChart3,
+  Pencil,
+  ShoppingCart,
+  Users,
 } from 'lucide-react';
 
 import AttachmentSection from './components/AttachmentSection';
 import TaskSection from './components/TaskSection';
 import CampaignArticlesSection from './components/CampaignArticlesSection';
 import ExportButtons from './components/ExportButtons';
+import KpiTargetModal from '@/components/KpiTargetModal';
 
 interface CampaignAttachment {
   id: string;
@@ -35,14 +43,44 @@ interface CampaignAttachment {
   createdAt?: string;
 }
 
+type AssignedUserLike = {
+  id: string | number;
+  username?: string | null;
+  email?: string | null;
+  name?: string | null;
+};
+
 interface CampaignTask {
   id: string;
   title?: string;
   name?: string;
-  description?: string;
+  description?: string | null;
   status?: string;
-  dueDate?: string;
+  priority?: string;
+  dueDate?: string | null;
   createdAt?: string;
+
+  assignedTo?: AssignedUserLike | string | number | null;
+  assignedToId?: string | number | null;
+
+  assignedToUser?: AssignedUserLike | null;
+  assignedToRelation?: AssignedUserLike | null;
+  assignedToData?: AssignedUserLike | null;
+  assignedToInfo?: AssignedUserLike | null;
+  assignedToEntity?: AssignedUserLike | null;
+  assignedToProfile?: AssignedUserLike | null;
+  assignedToObj?: AssignedUserLike | null;
+  assignedToItem?: AssignedUserLike | null;
+  assignedToMember?: AssignedUserLike | null;
+  assignedToRecord?: AssignedUserLike | null;
+  assignedToAccount?: AssignedUserLike | null;
+  assignedToContact?: AssignedUserLike | null;
+
+  createdBy?: {
+    id: string | number;
+    username?: string | null;
+    email?: string | null;
+  } | null;
 }
 
 interface CampaignArticle {
@@ -56,7 +94,29 @@ interface CampaignArticle {
   quantityAtCreation?: number | null;
   quantityAtStart?: number | null;
   quantityAtClosure?: number | null;
+  soldQuantity?: number | null;
   createdAt?: string;
+}
+
+interface CampaignConversion {
+  id: string | number;
+  type?: string;
+  status?: string;
+  amount?: string | number | null;
+  quantity?: number | null;
+  reference?: string | null;
+  conversionDate?: string | null;
+  lead?: {
+    id?: string | number;
+    name?: string | null;
+    email?: string | null;
+    status?: string | null;
+  } | null;
+  createdBy?: {
+    id?: string | number;
+    username?: string | null;
+    email?: string | null;
+  } | null;
 }
 
 interface CampaignChannelItem {
@@ -85,6 +145,18 @@ interface CampaignTargetAudienceItem {
   };
 }
 
+interface CampaignRoiSummary {
+  campaignId: number;
+  budgetPlanId: number | null;
+  currency: string;
+  totalCost: number;
+  totalRevenue: number;
+  netProfit: number;
+  roiPercent: number | null;
+  roiStatus: 'CALCULATED' | 'ZERO_COST_ZERO_REVENUE' | 'NON_CALCULABLE_ZERO_COST';
+  confirmedSalesCount: number;
+}
+
 interface CampaignDetailsType {
   id: string;
   name: string;
@@ -98,6 +170,8 @@ interface CampaignDetailsType {
     label?: string;
     name?: string;
   };
+
+  createdById?: string | number;
 
   createdBy?: {
     id?: string;
@@ -132,23 +206,70 @@ interface CampaignDetailsType {
   attachments?: CampaignAttachment[];
   tasks?: CampaignTask[];
   articles?: CampaignArticle[];
+  conversions?: CampaignConversion[];
 
   _count?: {
     attachments?: number;
     tasks?: number;
     articles?: number;
     leads?: number;
+    conversions?: number;
   };
 
   [key: string]: any;
 }
 
+function getConversionTypeLabel(type?: string) {
+  switch (type) {
+    case 'SALE':
+      return 'Vente';
+    case 'APPOINTMENT':
+      return 'Rendez-vous';
+    case 'REGISTRATION':
+      return 'Inscription';
+    case 'SUBSCRIPTION':
+      return 'Souscription';
+    case 'QUOTE_REQUEST':
+      return 'Demande de devis';
+    default:
+      return type || '—';
+  }
+}
+
+function getConversionStatusBadge(status?: string) {
+  switch (status) {
+    case 'PENDING':
+      return <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">En attente</Badge>;
+    case 'CONFIRMED':
+      return <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Confirmée</Badge>;
+    case 'CANCELLED':
+      return <Badge className="bg-red-100 text-red-800 hover:bg-red-100">Annulée</Badge>;
+    case 'REJECTED':
+      return <Badge className="bg-slate-100 text-slate-800 hover:bg-slate-100">Rejetée</Badge>;
+    default:
+      return <Badge variant="outline">{status || '—'}</Badge>;
+  }
+}
+
+const KPI_GLOBAL_LABELS: Record<string, { label: string; suffix: string }> = {
+  SOLD_QUANTITY: { label: 'Qté totale à vendre', suffix: 'unités' },
+  REVENUE: { label: 'Revenu total', suffix: 'FCFA' },
+  LEADS: { label: 'Leads', suffix: 'leads' },
+  CONVERSIONS: { label: 'Conversions', suffix: 'conversions' },
+  CLIENTS: { label: 'Clients', suffix: 'clients' },
+};
+
 export default function CampaignDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [campaign, setCampaign] = useState<CampaignDetailsType | null>(null);
   const [loading, setLoading] = useState(true);
+  const [roiSummary, setRoiSummary] = useState<CampaignRoiSummary | null>(null);
+  const [roiLoading, setRoiLoading] = useState(true);
+  const [unitPrices, setUnitPrices] = useState<Record<string, number>>({});
+  const [kpiModalOpen, setKpiModalOpen] = useState(false);
 
   const fetchCampaign = async () => {
     try {
@@ -163,15 +284,48 @@ export default function CampaignDetails() {
     }
   };
 
+  const fetchCampaignRoi = async () => {
+    try {
+      const res = await api.get(`/campaigns/${id}/roi`);
+      const payload = res.data?.data || res.data;
+      setRoiSummary(payload);
+    } catch (error) {
+      console.error('Failed to fetch campaign ROI', error);
+      setRoiSummary(null);
+    } finally {
+      setRoiLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (id) {
       fetchCampaign();
     }
   }, [id]);
 
+  useEffect(() => {
+    if (id) {
+      fetchCampaignRoi();
+    }
+  }, [id]);
+
+  // Récupération des montants de vente réels (CA) depuis Sage X3
+  useEffect(() => {
+    if (!id) return;
+    api.get(`/campaigns/${id}/sales-amounts`).then(res => {
+      setUnitPrices(res.data?.data || {});
+    }).catch(() => {
+      // Silence: les montants ne sont pas bloquants
+    });
+  }, [id]);
+
   const attachments = useMemo(() => campaign?.attachments || [], [campaign]);
   const tasks = useMemo(() => campaign?.tasks || [], [campaign]);
   const articles = useMemo(() => campaign?.articles || [], [campaign]);
+  const conversions = useMemo(() => campaign?.conversions || [], [campaign]);
+
+  const isCompletedCampaign =
+    campaign?.status === 'TERMINEE' || campaign?.status === 'COMPLETED' || campaign?.status === 'ANNULEE';
 
   const getStatusBadge = (status?: string) => {
     switch (status) {
@@ -185,7 +339,7 @@ export default function CampaignDetails() {
         return <Badge variant="secondary">Brouillon</Badge>;
       case 'COMPLETED':
         return (
-          <Badge className="bg-blue-100 text-blue-800 border-blue-200 hover:bg-blue-100">
+          <Badge className="bg-slate-100 text-slate-800 border-slate-200 hover:bg-slate-100">
             Terminée
           </Badge>
         );
@@ -199,6 +353,26 @@ export default function CampaignDetails() {
         return (
           <Badge className="bg-red-100 text-red-800 border-red-200 hover:bg-red-100">
             Annulée
+          </Badge>
+        );
+      case 'BROUILLON':
+        return <Badge variant="secondary">Brouillon</Badge>;
+      case 'PLANIFIEE':
+        return (
+          <Badge className="bg-blue-100 text-blue-800 border-blue-200 hover:bg-blue-100">
+            Planifiée
+          </Badge>
+        );
+      case 'EN_PAUSE':
+        return (
+          <Badge className="bg-yellow-100 text-yellow-800 border-yellow-200 hover:bg-yellow-100">
+            En pause
+          </Badge>
+        );
+      case 'TERMINEE':
+        return (
+          <Badge className="bg-slate-100 text-slate-800 border-slate-200 hover:bg-slate-100">
+            Terminée
           </Badge>
         );
       default:
@@ -221,6 +395,82 @@ export default function CampaignDetails() {
       return format(new Date(value), 'dd/MM/yyyy HH:mm');
     } catch {
       return '—';
+    }
+  };
+
+  const formatCurrencySafe = (value?: number | null, currency?: string) => {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) {
+      return '—';
+    }
+
+    try {
+      return new Intl.NumberFormat('fr-FR', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2,
+      }).format(Number(value)) + ` ${currency || 'XAF'}`;
+    } catch {
+      return `${value} ${currency || 'XAF'}`;
+    }
+  };
+
+  const formatRoiDisplaySafe = (value?: number | null) => {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) {
+      return '—';
+    }
+
+    try {
+      const numValue = Number(value);
+      if (numValue > 100) {
+        const formatted = new Intl.NumberFormat('fr-FR', {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 2,
+        }).format(numValue) + ' %';
+        return `100%+ (ROI réel: ${formatted})`;
+      }
+      return new Intl.NumberFormat('fr-FR', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2,
+      }).format(numValue) + ' %';
+    } catch {
+      return `${value} %`;
+    }
+  };
+
+  const getRoiStatusBadge = (status?: CampaignRoiSummary['roiStatus']) => {
+    switch (status) {
+      case 'CALCULATED':
+        return (
+          <Badge className="bg-green-100 text-green-800 border-green-200 hover:bg-green-100">
+            Calculé
+          </Badge>
+        );
+      case 'ZERO_COST_ZERO_REVENUE':
+        return (
+          <Badge className="bg-slate-100 text-slate-800 border-slate-200 hover:bg-slate-100">
+            Coût nul / revenu nul
+          </Badge>
+        );
+      case 'NON_CALCULABLE_ZERO_COST':
+        return (
+          <Badge className="bg-amber-100 text-amber-800 border-amber-200 hover:bg-amber-100">
+            Non calculable
+          </Badge>
+        );
+      default:
+        return <Badge variant="outline">—</Badge>;
+    }
+  };
+
+  const getRoiStatusExplanation = (status?: CampaignRoiSummary['roiStatus']) => {
+    switch (status) {
+      case 'CALCULATED':
+        return 'Le ROI est calculé à partir des ventes confirmées (type SALE) et des dépenses réelles enregistrées pour cette campagne.';
+      case 'ZERO_COST_ZERO_REVENUE':
+        return 'Aucune dépense réelle et aucun revenu confirmé ne sont encore enregistrés pour cette campagne.';
+      case 'NON_CALCULABLE_ZERO_COST':
+        return 'Le ROI ne peut pas être calculé car aucune dépense réelle n’est encore enregistrée pour cette campagne.';
+      default:
+        return 'Aucune information complémentaire disponible pour le calcul du ROI.';
     }
   };
 
@@ -267,11 +517,110 @@ export default function CampaignDetails() {
     return campaign?.targetAudience || '—';
   })();
 
+  const totalSold = useMemo(
+    () => articles.reduce((sum, a) => sum + (a.soldQuantity ?? 0), 0),
+    [articles]
+  );
+
+  const conversionRate = useMemo(() => {
+    const convs = campaign?._count?.conversions ?? conversions.length;
+    const ld = campaign?._count?.leads ?? 0;
+    return ld > 0 ? Math.round((convs / ld) * 100) : 0;
+  }, [campaign, conversions]);
+
+  // KPI targets
+  const kpiTargets = useMemo(() => {
+    const raw = (campaign as any)?.kpiTargets;
+    if (!Array.isArray(raw)) return {};
+    const map: Record<string, number> = {};
+    for (const t of raw) {
+      map[t.kpiName] = Number(t.targetValue);
+    }
+    return map;
+  }, [campaign]);
+
+  const getKpiProgress = (kpiName: string, current: number): number | null => {
+    const target = kpiTargets[kpiName];
+    if (!target || target <= 0) return null;
+    return Math.min(Math.round((current / target) * 100), 100);
+  };
+
+  // Objectifs KPI globaux de la campagne (cible + valeur actuelle + % d'atteinte)
+  const kpiGlobalBreakdown = useMemo(() => {
+    const currentByKpi: Record<string, number> = {
+      SOLD_QUANTITY: totalSold,
+      REVENUE: roiSummary?.totalRevenue ?? 0,
+      LEADS: campaign?._count?.leads ?? 0,
+      CONVERSIONS: campaign?._count?.conversions ?? conversions.length,
+      CLIENTS: roiSummary?.confirmedSalesCount ?? 0,
+    };
+    return Object.entries(kpiTargets)
+      .filter(([, target]) => Number(target) > 0)
+      .map(([kpiName, target]) => {
+        const targetValue = Number(target);
+        const current = currentByKpi[kpiName] ?? 0;
+        const pct = Math.min(Math.round((current / targetValue) * 100), 100);
+        return { kpiName, target: targetValue, current, pct };
+      });
+  }, [kpiTargets, totalSold, roiSummary, campaign, conversions]);
+
   const stats = [
     {
       label: 'Articles',
       value: campaign?._count?.articles ?? articles.length,
       icon: Package,
+    },
+    {
+      label: 'Qté totale vendu',
+      value: totalSold > 0 ? totalSold.toLocaleString('fr-FR') : '—',
+      icon: ShoppingCart,
+      kpiName: 'SOLD_QUANTITY',
+      currentValue: totalSold,
+    },
+    {
+      label: 'Revenu total',
+      value: roiLoading ? (
+        <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>Calcul…</span>
+        </span>
+      ) : roiSummary?.totalRevenue != null && roiSummary.totalRevenue > 0
+        ? Number(roiSummary.totalRevenue).toLocaleString('fr-FR') + ' FCFA'
+        : '—',
+      icon: TrendingUp,
+      kpiName: 'REVENUE',
+      currentValue: roiSummary?.totalRevenue ?? 0,
+    },
+    {
+      label: 'Leads',
+      value: campaign?._count?.leads ?? 0,
+      icon: Target,
+      kpiName: 'LEADS',
+      currentValue: campaign?._count?.leads ?? 0,
+    },
+    {
+      label: 'Conversions',
+      value: (() => {
+        const convs = campaign?._count?.conversions ?? conversions.length;
+        return `${convs} (${conversionRate}%)`;
+      })(),
+      icon: BarChart3,
+      kpiName: 'CONVERSIONS',
+      currentValue: campaign?._count?.conversions ?? conversions.length,
+    },
+    {
+      label: 'Clients',
+      value: roiLoading ? (
+        <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>Calcul…</span>
+        </span>
+      ) : roiSummary?.confirmedSalesCount != null
+        ? roiSummary.confirmedSalesCount
+        : '—',
+      icon: Users,
+      kpiName: 'CLIENTS',
+      currentValue: roiSummary?.confirmedSalesCount ?? 0,
     },
     {
       label: 'Tâches',
@@ -282,11 +631,6 @@ export default function CampaignDetails() {
       label: 'Pièces jointes',
       value: campaign?._count?.attachments ?? attachments.length,
       icon: Paperclip,
-    },
-    {
-      label: 'Leads',
-      value: campaign?._count?.leads ?? 0,
-      icon: TrendingUp,
     },
   ];
 
@@ -330,6 +674,11 @@ export default function CampaignDetails() {
     );
   }
 
+  // Droit de modifier les objectifs KPI de cette campagne (même logique que le backend)
+  const canEditThisCampaign =
+    !!user?.permissions?.canEditAllCampaigns ||
+    String(user?.id) === String(campaign.createdById ?? campaign.createdBy?.id);
+
   return (
     <div className="flex flex-col min-h-full bg-white dark:bg-slate-950 lg:bg-slate-50/50 lg:dark:bg-slate-950 transition-colors duration-200">
       <div className="sticky top-0 z-20 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur">
@@ -363,6 +712,22 @@ export default function CampaignDetails() {
                 <ExportButtons campaignId={campaign.id} />
               </div>
             </div>
+
+            <Button
+              type="button"
+              variant="outline"
+              className="inline-flex items-center gap-2"
+              onClick={() =>
+                window.open(
+                  'http://192.168.0.13:84/incident',
+                  '_blank',
+                  'noopener,noreferrer'
+                )
+              }
+            >
+              <ExternalLink className="h-4 w-4" />
+              Déclarer un incident
+            </Button>
           </div>
         </div>
       </div>
@@ -398,26 +763,146 @@ export default function CampaignDetails() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-              {stats.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <Card key={item.label}>
-                    <CardContent className="p-5">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-sm text-muted-foreground">{item.label}</p>
-                          <p className="text-2xl font-bold mt-1">{item.value}</p>
+            {isCompletedCampaign && (
+              <Card className="border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900">
+                <CardContent className="py-4">
+                  <div className="flex items-start gap-3 text-sm text-slate-700 dark:text-slate-300">
+                    <Lock className="h-4 w-4 mt-0.5 shrink-0" />
+                    <div>
+                      Cette campagne est terminée. L’édition de la campagne ainsi que l’ajout
+                      d’articles, de tâches et de pièces jointes sont désactivés.
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                {stats.map((item) => {
+                  const Icon = item.icon;
+                  const kpiName = (item as any).kpiName;
+                  const currentValue = (item as any).currentValue;
+                  const progress = kpiName ? getKpiProgress(kpiName, currentValue ?? 0) : null;
+                  return (
+                    <Card key={item.label}>
+                      <CardContent className="p-5">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">{item.label}</p>
+                            <p className="text-2xl font-bold mt-1">{item.value}</p>
+                            {progress !== null && (
+                              <div className="mt-2">
+                                <div className="flex items-center justify-between gap-2 text-xs mb-1">
+                                  <span className="text-muted-foreground">Objectif</span>
+                                  <span className={progress >= 100 ? 'text-green-600 font-medium' : 'text-muted-foreground'}>{progress}%</span>
+                                </div>
+                                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                                  <div
+                                    className={`h-full rounded-full transition-all ${
+                                      progress >= 100
+                                        ? 'bg-green-500'
+                                        : progress >= 75
+                                          ? 'bg-emerald-400'
+                                          : progress >= 50
+                                            ? 'bg-amber-400'
+                                            : 'bg-red-400'
+                                    }`}
+                                    style={{ width: `${progress}%` }}
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                          <div className="h-10 w-10 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
+                            <Icon className="h-5 w-5 text-slate-600 dark:text-slate-300" />
+                          </div>
                         </div>
-                        <div className="h-10 w-10 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
-                          <Icon className="h-5 w-5 text-slate-600 dark:text-slate-300" />
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
             </div>
+
+            {/* Objectifs KPI globaux de la campagne */}
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                <CardTitle>Objectifs KPI globaux de la campagne</CardTitle>
+                {user?.permissions?.canCreateCampaign && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={isCompletedCampaign || !canEditThisCampaign}
+                    className="flex items-center gap-2 whitespace-nowrap font-semibold"
+                    onClick={() => setKpiModalOpen(true)}
+                    title={
+                      isCompletedCampaign
+                        ? 'Objectifs KPI verrouillés : la campagne est terminée'
+                        : !canEditThisCampaign
+                          ? "Vous n'êtes pas autorisé à modifier les objectifs KPI de cette campagne"
+                          : 'Définir les objectifs KPI de la campagne'
+                    }
+                  >
+                    <Target className="h-4 w-4" />
+                    <span className="hidden sm:inline">Définir les Objectifs KPI global de la campagne</span>
+                  </Button>
+                )}
+              </CardHeader>
+              <CardContent>
+                {kpiGlobalBreakdown.length === 0 ? (
+                  <div className="rounded-lg border border-dashed p-6 text-center">
+                    <p className="text-sm text-muted-foreground">
+                      Aucun objectif KPI défini.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {kpiGlobalBreakdown.map((kpi) => {
+                      const meta = KPI_GLOBAL_LABELS[kpi.kpiName];
+                      const label = meta?.label ?? kpi.kpiName;
+                      const suffix = meta?.suffix ?? '';
+                      return (
+                        <div key={kpi.kpiName}>
+                          <div className="flex items-center justify-between gap-2 text-sm mb-1">
+                            <span className="font-medium">{label}</span>
+                            <span className="text-muted-foreground">
+                              {kpi.current.toLocaleString('fr-FR')} / {kpi.target.toLocaleString('fr-FR')}{' '}
+                              {suffix}
+                            </span>
+                            <span
+                              className={`shrink-0 font-semibold ${
+                                kpi.pct >= 100
+                                  ? 'text-green-600'
+                                  : kpi.pct >= 75
+                                    ? 'text-emerald-500'
+                                    : kpi.pct >= 50
+                                      ? 'text-amber-500'
+                                      : 'text-red-500'
+                              }`}
+                            >
+                              {kpi.pct}%
+                            </span>
+                          </div>
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                            <div
+                              className={`h-full rounded-full transition-all ${
+                                kpi.pct >= 100
+                                  ? 'bg-green-500'
+                                  : kpi.pct >= 75
+                                    ? 'bg-emerald-400'
+                                    : kpi.pct >= 50
+                                      ? 'bg-amber-400'
+                                      : 'bg-red-400'
+                              }`}
+                              style={{ width: `${kpi.pct}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
 
             <Card>
               <CardHeader>
@@ -426,6 +911,17 @@ export default function CampaignDetails() {
               <CardContent>
                 <div className="text-sm leading-7 text-slate-700 dark:text-slate-300 whitespace-pre-wrap">
                   {campaign.description || 'Aucune description renseignée.'}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Stratégie</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-sm leading-7 text-slate-700 dark:text-slate-300 whitespace-pre-wrap">
+                  {campaign.strategy || 'Aucune stratégie renseignée.'}
                 </div>
               </CardContent>
             </Card>
@@ -490,7 +986,7 @@ export default function CampaignDetails() {
                               </div>
 
                               <div className="px-4 py-3 bg-slate-50/60 dark:bg-slate-900/40">
-                                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                                <div className="grid grid-cols-2 md:grid-cols-7 gap-3">
                                   <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2">
                                     <div className="text-[11px] leading-4 text-slate-500 dark:text-slate-400">
                                       Quantité
@@ -539,10 +1035,36 @@ export default function CampaignDetails() {
                                     <div className="text-[11px] leading-4 text-slate-500 dark:text-slate-400">
                                       Quantité
                                       <br />
+                                      vendue
+                                    </div>
+                                    <div className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">
+                                      {article.soldQuantity ?? 0}
+                                    </div>
+                                  </div>
+
+                                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2">
+                                    <div className="text-[11px] leading-4 text-slate-500 dark:text-slate-400">
+                                      Quantité
+                                      <br />
                                       à la clôture
                                     </div>
                                     <div className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">
                                       {article.quantityAtClosure ?? 0}
+                                    </div>
+                                  </div>
+
+                                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2">
+                                    <div className="text-[11px] leading-4 text-slate-500 dark:text-slate-400">
+                                      Montant total des ventes de l'article
+                                      <br />
+                                      en (FCFA)
+                                    </div>
+                                    <div className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">
+                                      {(() => {
+                                        const amount = unitPrices[Number(article.id)];
+                                        if (amount == null || amount === 0) return '—';
+                                        return Number(amount).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+                                      })()}
                                     </div>
                                   </div>
                                 </div>
@@ -557,22 +1079,125 @@ export default function CampaignDetails() {
               </CardContent>
             </Card>
 
-            <CampaignArticlesSection
+            {isCompletedCampaign ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Gestion des articles</CardTitle>
+                </CardHeader>
+                <CardContent className="text-sm text-muted-foreground">
+                  Ajout d’articles désactivé : cette campagne est terminée.
+                </CardContent>
+              </Card>
+            ) : (
+              <CampaignArticlesSection
+                campaignId={campaign.id}
+                articles={articles}
+                onUpdate={fetchCampaign}
+              />
+            )}
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                <CardTitle>Conversions de la campagne</CardTitle>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="inline-flex items-center gap-2"
+                  onClick={() => navigate('/conversions')}
+                >
+                  <BarChart3 className="h-4 w-4" />
+                  Voir toutes les conversions
+                </Button>
+              </CardHeader>
+              <CardContent>
+                {conversions.length === 0 ? (
+                  <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+                    Aucune conversion enregistrée pour cette campagne.
+                  </div>
+                ) : (
+                  <div className="rounded-xl border overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50 dark:bg-slate-900">
+                        <tr className="border-b">
+                          <th className="px-4 py-3 text-left font-medium">Lead</th>
+                          <th className="px-4 py-3 text-left font-medium">Type</th>
+                          <th className="px-4 py-3 text-left font-medium">Statut</th>
+                          <th className="px-4 py-3 text-left font-medium">Montant</th>
+                          <th className="px-4 py-3 text-left font-medium">Quantité</th>
+                          <th className="px-4 py-3 text-left font-medium">Date</th>
+                          <th className="px-4 py-3 text-left font-medium">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {conversions.map((conversion) => (
+                          <tr
+                            key={conversion.id}
+                            className="border-b last:border-b-0 hover:bg-slate-50/70 dark:hover:bg-slate-900/40"
+                          >
+                            <td className="px-4 py-3">
+                              <div className="font-medium">
+                                {conversion.lead?.name || '—'}
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                {conversion.lead?.email || '—'}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                              {getConversionTypeLabel(conversion.type)}
+                            </td>
+                            <td className="px-4 py-3">
+                              {getConversionStatusBadge(conversion.status)}
+                            </td>
+                            <td className="px-4 py-3">{conversion.amount ?? '—'}</td>
+                            <td className="px-4 py-3">{conversion.quantity ?? '—'}</td>
+                            <td className="px-4 py-3">
+                              {formatDateSafe(conversion.conversionDate || undefined)}
+                            </td>
+                            <td className="px-4 py-3">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="inline-flex items-center gap-2"
+                                onClick={() => navigate(`/conversions/${conversion.id}/edit`)}
+                              >
+                                <Pencil className="h-4 w-4" />
+                                Modifier
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <LeadActivityTimeline
               campaignId={campaign.id}
-              articles={articles}
-              onUpdate={fetchCampaign}
+              title="Historique des leads de la campagne"
+            />
+
+            <KpiTargetModal
+              campaignId={campaign.id}
+              open={kpiModalOpen}
+              onOpenChange={setKpiModalOpen}
+              onSaved={fetchCampaign}
             />
 
             <TaskSection
               campaignId={campaign.id}
               tasks={tasks}
               onUpdate={fetchCampaign}
+              isCampaignCompleted={isCompletedCampaign}
             />
 
             <AttachmentSection
               campaignId={campaign.id}
               attachments={attachments}
               onUpdate={fetchCampaign}
+              isCampaignCompleted={isCompletedCampaign}
             />
           </div>
 
@@ -582,57 +1207,57 @@ export default function CampaignDetails() {
                 <CardTitle>Propriétés</CardTitle>
               </CardHeader>
               <CardContent className="pt-0">
-                <PropertyRow
-                  label="Nom"
-                  value={campaign.name || '—'}
-                />
-                <PropertyRow
-                  label="Statut"
-                  value={getStatusBadge(campaign.status)}
-                />
-                <PropertyRow
-                  label="Objectif"
-                  icon={Target}
-                  value={displayObjective}
-                />
-                <PropertyRow
-                  label="Date de début"
-                  icon={Calendar}
-                  value={formatDateSafe(campaign.startDate)}
-                />
-                <PropertyRow
-                  label="Date de fin"
-                  icon={Calendar}
-                  value={formatDateSafe(campaign.endDate)}
-                />
-                <PropertyRow
-                  label="Canal"
-                  value={displayChannels}
-                />
-                {/* <PropertyRow
-                  label="Type"
-                  value={campaign.type || '—'}
-                /> */}
-                {/* <PropertyRow
-                  label="Priorité"
-                  value={campaign.priority || '—'}
-                /> */}
-                <PropertyRow
-                  label="Budget"
-                  value={campaign.budget ?? '—'}
-                />
-                <PropertyRow
-                  label="Cible"
-                  value={displayTargetAudiences}
-                />
-                <PropertyRow
-                  label="Responsable"
-                  value={campaign.manager || campaign.owner || '—'}
-                />
-                <PropertyRow
-                  label="Localisation"
-                  value={campaign.location || '—'}
-                />
+                <PropertyRow label="Nom" value={campaign.name || '—'} />
+                <PropertyRow label="Statut" value={getStatusBadge(campaign.status)} />
+                <PropertyRow label="Objectif" icon={Target} value={displayObjective} />
+                <PropertyRow label="Date de début" icon={Calendar} value={formatDateSafe(campaign.startDate)} />
+                <PropertyRow label="Date de fin" icon={Calendar} value={formatDateSafe(campaign.endDate)} />
+                <PropertyRow label="Canal" value={displayChannels} />
+                <PropertyRow label="Budget total" icon={BarChart3} value={campaign.totalBudget != null ? Number(campaign.totalBudget).toLocaleString('fr-FR') + ' FCFA' : '—'} />
+                <PropertyRow label="Cible" value={displayTargetAudiences} />
+                <PropertyRow label="Responsable" value={campaign.manager || campaign.owner || '—'} />
+                <PropertyRow label="Localisation" value={campaign.location || '—'} />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>ROI de la campagne</CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {roiLoading ? (
+                  <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Chargement du ROI...
+                  </div>
+                ) : (
+                  <>
+                    <PropertyRow
+                      label="Coût total"
+                      value={formatCurrencySafe(roiSummary?.totalCost, roiSummary?.currency)}
+                    />
+                    <PropertyRow
+                      label="Profit net"
+                      value={formatCurrencySafe(roiSummary?.netProfit, roiSummary?.currency)}
+                    />
+                    <PropertyRow
+                      label="ROI"
+                      value={
+                        roiSummary?.roiPercent === null
+                          ? 'Non calculable (coût = 0)'
+                          : formatRoiDisplaySafe(roiSummary?.roiPercent)
+                      }
+                    />
+                    <PropertyRow
+                      label="Statut ROI"
+                      value={getRoiStatusBadge(roiSummary?.roiStatus)}
+                    />
+
+                    <div className="mt-4 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-4 py-3 text-sm leading-6 text-slate-700 dark:text-slate-300">
+                      {getRoiStatusExplanation(roiSummary?.roiStatus)}
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
 
@@ -641,25 +1266,10 @@ export default function CampaignDetails() {
                 <CardTitle>Méta informations</CardTitle>
               </CardHeader>
               <CardContent className="pt-0">
-                <PropertyRow
-                  label="Créée par"
-                  icon={User}
-                  value={displayCreator}
-                />
-                <PropertyRow
-                  label="Email créateur"
-                  value={campaign.createdBy?.email || '—'}
-                />
-                <PropertyRow
-                  label="Dernière mise à jour"
-                  icon={Clock}
-                  value={formatDateTimeSafe(campaign.updatedAt)}
-                />
-                <PropertyRow
-                  label="Créée le"
-                  icon={Clock}
-                  value={formatDateTimeSafe(campaign.createdAt)}
-                />
+                <PropertyRow label="Créée par" icon={User} value={displayCreator} />
+                <PropertyRow label="Email créateur" value={campaign.createdBy?.email || '—'} />
+                <PropertyRow label="Dernière mise à jour" icon={Clock} value={formatDateTimeSafe(campaign.updatedAt)} />
+                <PropertyRow label="Créée le" icon={Clock} value={formatDateTimeSafe(campaign.createdAt)} />
                 <PropertyRow
                   label="Modifiée par"
                   value={
@@ -677,25 +1287,11 @@ export default function CampaignDetails() {
                 <CardTitle>Contexte métier</CardTitle>
               </CardHeader>
               <CardContent className="pt-0">
-                <PropertyRow
-                  label="Notes"
-                  value={campaign.notes || '—'}
-                />
-                <PropertyRow
-                  label="Pièces jointes"
-                  icon={Paperclip}
-                  value={attachments.length}
-                />
-                <PropertyRow
-                  label="Tâches"
-                  icon={CheckSquare}
-                  value={tasks.length}
-                />
-                <PropertyRow
-                  label="Articles"
-                  icon={Package}
-                  value={articles.length}
-                />
+                <PropertyRow label="Notes" value={campaign.notes || '—'} />
+                <PropertyRow label="Pièces jointes" icon={Paperclip} value={attachments.length} />
+                <PropertyRow label="Tâches" icon={CheckSquare} value={tasks.length} />
+                <PropertyRow label="Articles" icon={Package} value={articles.length} />
+                <PropertyRow label="Conversions" icon={TrendingUp} value={campaign?._count?.conversions ?? conversions.length} />
               </CardContent>
             </Card>
           </div>

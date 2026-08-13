@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import api from '@/lib/api';
-import { Plus, Pencil, Trash2, User as UserIcon, Shield, Mail } from 'lucide-react';
+import { Plus, Pencil, UserX, UserCheck, User as UserIcon, Shield, Mail } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
+import ResetUserPasswordModal from '@/components/ResetUserPasswordModal';
 
 interface User {
   id: string;
@@ -14,6 +15,7 @@ interface User {
     id: string;
     name: string;
   };
+  isActive: boolean;
   createdAt: string;
 }
 
@@ -37,10 +39,17 @@ export default function UserList() {
     fetchUsers();
   }, []);
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this user?')) return;
+  const handleToggleActive = async (user: User) => {
+    const nextActive = !user.isActive;
+    if (
+      !confirm(
+        nextActive
+          ? `Réactiver l'utilisateur « ${user.username} » ?`
+          : `Désactiver l'utilisateur « ${user.username} » ?`
+      )
+    ) return;
     try {
-      await api.delete(`/users/${id}`);
+      await api.patch(`/users/${user.id}/status`, { isActive: nextActive });
       fetchUsers();
     } catch (error) {
       console.error(error);
@@ -96,7 +105,12 @@ export default function UserList() {
                             {user.username.charAt(0).toUpperCase()}
                           </div>
                           <div>
-                            <div className="font-medium">{user.username}</div>
+                            <div className="font-medium flex items-center gap-2">
+                              {user.username}
+                              {!user.isActive && (
+                                <Badge variant="secondary" className="text-[10px]">Désactivé</Badge>
+                              )}
+                            </div>
                             <div className="text-xs text-muted-foreground flex items-center gap-1">
                               <Mail className="h-3 w-3" /> {user.email}
                             </div>
@@ -113,13 +127,31 @@ export default function UserList() {
                         {new Date(user.createdAt).toLocaleDateString()}
                       </td>
                       <td className="p-4 align-middle text-right">
-                        <div className="flex justify-end gap-2">
-                          <Button variant="ghost" size="icon" onClick={() => navigate(`/users/${user.id}`)}>
-                            <Pencil className="h-4 w-4 text-muted-foreground hover:text-foreground" />
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <Button variant="ghost" size="sm" onClick={() => navigate(`/users/${user.id}`)}>
+                            <Pencil className="h-4 w-4 mr-1 text-muted-foreground" />
+                            Modifier
                           </Button>
-                          <Button variant="ghost" size="icon" className="hover:bg-destructive/10 hover:text-destructive" onClick={() => handleDelete(user.id)}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          <ResetUserPasswordModal userId={user.id} username={user.username} />
+                          {user.role.name !== 'SUPER_ADMIN' && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className={
+                                user.isActive
+                                  ? 'hover:bg-destructive/10 hover:text-destructive'
+                                  : 'hover:bg-green-500/10 hover:text-green-600'
+                              }
+                              onClick={() => handleToggleActive(user)}
+                            >
+                              {user.isActive ? (
+                                <UserX className="h-4 w-4 mr-1" />
+                              ) : (
+                                <UserCheck className="h-4 w-4 mr-1" />
+                              )}
+                              {user.isActive ? 'Désactiver' : 'Activer'}
+                            </Button>
+                          )}
                         </div>
                       </td>
                     </tr>

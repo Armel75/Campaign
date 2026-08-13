@@ -8,17 +8,13 @@
   ],
   "scripts": {
     "dev": "concurrently \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
-
     "build": "npm run build:api && npm run build:web",
     "build:api": "npm run build -w apps/api",
     "build:web": "npm run build -w apps/web",
-
     "start": "npm run start:api",
     "start:api": "npm run start -w apps/api",
-
     "lint": "npm run lint -w apps/api && npm run lint -w apps/web",
     "format": "prettier --write .",
-
     "prisma:migrate": "npm run prisma:migrate -w apps/api",
     "prisma:seed": "npm run prisma:seed -w apps/api"
   },
@@ -28,6 +24,8 @@
     "typescript": "~5.8.2"
   },
   "dependencies": {
-    "@radix-ui/react-select": "^2.2.6"
+    "@radix-ui/react-select": "^2.2.6",
+    "exceljs": "^4.4.0",
+    "nodemailer": "^9.0.5"
   }
 }

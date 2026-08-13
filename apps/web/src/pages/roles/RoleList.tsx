@@ -27,6 +27,14 @@ interface Role {
   canManageRoles: boolean;
   canExportCampaign: boolean;
 
+  canViewDashboard: boolean;
+  canViewCampaigns: boolean;
+  canViewObjectives: boolean;
+  canViewTasks: boolean;
+  canViewLeads: boolean;
+  canViewExpenses: boolean;
+  canViewSettings: boolean;
+
   createdAt: string;
   updatedAt: string;
 }
@@ -149,7 +157,7 @@ export default function RoleList() {
                         </div>
                       </div>
 
-                      <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+                      <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-5">
                         <div className="rounded-lg border p-4">
                           <h4 className="mb-3 text-sm font-semibold">Campaign</h4>
                           <div className="flex flex-wrap gap-2">
@@ -214,6 +222,40 @@ export default function RoleList() {
                             <PermissionBadge
                               active={role.canManageRoles}
                               label="Roles"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="rounded-lg border p-4">
+                          <h4 className="mb-3 text-sm font-semibold">UI visibility</h4>
+                          <div className="flex flex-wrap gap-2">
+                            <PermissionBadge
+                              active={role.canViewDashboard}
+                              label="Dashboard"
+                            />
+                            <PermissionBadge
+                              active={role.canViewCampaigns}
+                              label="Campaigns"
+                            />
+                            <PermissionBadge
+                              active={role.canViewObjectives}
+                              label="Objectives"
+                            />
+                            <PermissionBadge
+                              active={role.canViewTasks}
+                              label="Tasks"
+                            />
+                            <PermissionBadge
+                              active={role.canViewLeads}
+                              label="Leads"
+                            />
+                            <PermissionBadge
+                              active={role.canViewExpenses}
+                              label="Expenses"
+                            />
+                            <PermissionBadge
+                              active={role.canViewSettings}
+                              label="Settings"
                             />
                           </div>
                         </div>

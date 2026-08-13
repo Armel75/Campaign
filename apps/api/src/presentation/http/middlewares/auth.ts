@@ -9,24 +9,42 @@ export interface AuthRequest extends Request {
     roleId: number;
     role: string;
 
+    // Campaign permissions
     canViewAllCampaigns: boolean;
     canEditAllCampaigns: boolean;
     canDeleteAllCampaigns: boolean;
     canCreateCampaign: boolean;
 
+    // Tasks
     canManageTasks: boolean;
     canAssignTasks: boolean;
 
+    // Campaign content
     canManageCampaignArticles: boolean;
     canManageAttachments: boolean;
 
+    // Administration
     canManageUsers: boolean;
     canManageRoles: boolean;
     canExportCampaign: boolean;
+
+    // UI visibility permissions
+    canViewDashboard: boolean;
+    canViewStrategicDashboard: boolean;
+    canViewCampaigns: boolean;
+    canViewObjectives: boolean;
+    canViewTasks: boolean;
+    canViewLeads: boolean;
+    canViewExpenses: boolean;
+    canViewSettings: boolean;
   };
 }
 
-export const requireAuth = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const requireAuth = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader) {
@@ -43,7 +61,7 @@ export const requireAuth = async (req: AuthRequest, res: Response, next: NextFun
     const decoded = jwt.verify(
       token,
       process.env.JWT_SECRET || 'super-secret-jwt-key-change-me'
-    ) as any;
+    ) as { userId?: number | string };
 
     const userId = Number(decoded.userId);
 
@@ -60,20 +78,34 @@ export const requireAuth = async (req: AuthRequest, res: Response, next: NextFun
           select: {
             name: true,
 
+            // Campaign permissions
             canViewAllCampaigns: true,
             canEditAllCampaigns: true,
             canDeleteAllCampaigns: true,
             canCreateCampaign: true,
 
+            // Tasks
             canManageTasks: true,
             canAssignTasks: true,
 
+            // Campaign content
             canManageCampaignArticles: true,
             canManageAttachments: true,
 
+            // Administration
             canManageUsers: true,
             canManageRoles: true,
             canExportCampaign: true,
+
+            // UI visibility permissions
+            canViewDashboard: true,
+            canViewStrategicDashboard: true,
+            canViewCampaigns: true,
+            canViewObjectives: true,
+            canViewTasks: true,
+            canViewLeads: true,
+            canViewExpenses: true,
+            canViewSettings: true,
           },
         },
       },
@@ -88,34 +120,40 @@ export const requireAuth = async (req: AuthRequest, res: Response, next: NextFun
       roleId: currentUser.roleId,
       role: currentUser.role.name,
 
+      // Campaign permissions
       canViewAllCampaigns: currentUser.role.canViewAllCampaigns ?? false,
       canEditAllCampaigns: currentUser.role.canEditAllCampaigns ?? false,
       canDeleteAllCampaigns: currentUser.role.canDeleteAllCampaigns ?? false,
       canCreateCampaign: currentUser.role.canCreateCampaign ?? false,
 
+      // Tasks
       canManageTasks: currentUser.role.canManageTasks ?? false,
       canAssignTasks: currentUser.role.canAssignTasks ?? false,
 
-      canManageCampaignArticles: currentUser.role.canManageCampaignArticles ?? false,
+      // Campaign content
+      canManageCampaignArticles:
+        currentUser.role.canManageCampaignArticles ?? false,
       canManageAttachments: currentUser.role.canManageAttachments ?? false,
 
+      // Administration
       canManageUsers: currentUser.role.canManageUsers ?? false,
       canManageRoles: currentUser.role.canManageRoles ?? false,
       canExportCampaign: currentUser.role.canExportCampaign ?? false,
+
+      // UI visibility permissions
+      canViewDashboard: currentUser.role.canViewDashboard ?? false,
+      canViewStrategicDashboard: currentUser.role.canViewStrategicDashboard ?? false,
+      canViewCampaigns: currentUser.role.canViewCampaigns ?? false,
+      canViewObjectives: currentUser.role.canViewObjectives ?? false,
+      canViewTasks: currentUser.role.canViewTasks ?? false,
+      canViewLeads: currentUser.role.canViewLeads ?? false,
+      canViewExpenses: currentUser.role.canViewExpenses ?? false,
+      canViewSettings: currentUser.role.canViewSettings ?? false,
     };
 
     next();
   } catch (error) {
-    return res.status(401).json({ message: 'Invalid token' } as ApiError);
-  }
-};
-
-export const requireRole = (roles: string[]) => {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user || !roles.includes(req.user.role)) {
-      return res.status(403).json({ message: 'Forbidden' } as ApiError);
-    }
-
-    next();
-  };
+  console.error('[requireAuth ERROR]', error);
+  return res.status(401).json({ message: 'Invalid token' } as ApiError);
+}
 };
