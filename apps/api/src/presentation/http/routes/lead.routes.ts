@@ -4,6 +4,12 @@ import * as XLSX from 'xlsx';
 import prisma from '../../../infrastructure/prisma/client';
 import { requireAuth, AuthRequest } from '../middlewares/auth';
 import { requirePermission } from '../middlewares/permissions';
+import {
+  parseSheet,
+  detectColumnMap,
+  type ColumnCandidate,
+  type ColumnDetectionResult,
+} from '../../../services/leadImportMapper.service';
 
 const router = Router();
 const prismaAny = prisma as any;
@@ -62,6 +68,34 @@ function leadStatusLabel(status?: string) {
   }
 }
 
+/**
+ * Parse un mapping fourni par l'UI ({ champ: en-tête }) en ne gardant que les
+ * valeurs correspondant à de vraies colonnes du fichier. Retourne null si absent.
+ */
+function parseMappingOverride(
+  raw: unknown,
+  headers: string[],
+): Record<string, string> | null {
+  if (raw === undefined || raw === null || raw === '') return null;
+  let parsed: Record<string, unknown>;
+  try {
+    parsed =
+      typeof raw === 'string'
+        ? (JSON.parse(raw) as Record<string, unknown>)
+        : (raw as Record<string, unknown>);
+  } catch {
+    return null;
+  }
+  const headerSet = new Set(headers);
+  const out: Record<string, string> = {};
+  for (const [field, header] of Object.entries(parsed)) {
+    if (typeof header === 'string' && header && headerSet.has(header)) {
+      out[field] = header;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 // ─── Import en masse des leads (Excel/CSV) ───
 const importUpload = multer({
   storage: multer.memoryStorage(),
@@ -85,63 +119,8 @@ const LEAD_STATUS_LABEL_TO_CODE: Record<string, string> = {
   Invalide: 'INVALIDE',
 };
 
-function normalizeHeaderKey(key: string): string {
-  return String(key)
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function detectColumnMap(headers: string[]): Record<string, string> {
-  const rules: Array<[string, string[]]> = [
-    ['campaign', ['campagne', 'campaign', 'id campagne', 'nom campagne', 'idcampagne', 'nomcampagne']],
-    ['name', ['nom', 'name', 'nom du client', 'client', 'raison sociale']],
-    ['email', ['email', 'mail', 'courriel']],
-    ['phone', ['telephone', 'tel', 'phone', 'portable', 'mobile', 'gsm']],
-    ['status', ['statut', 'status', 'etat']],
-    ['assignedTo', ['utilisateur glpi', 'assign', 'glpi', 'responsable', 'agent']],
-    ['notes', ['notes', 'note', 'commentaire', 'remarques']],
-  ];
-
-  const map: Record<string, string> = {};
-  const normalizedHeaders = headers.map(normalizeHeaderKey);
-  const used = new Set<number>();
-
-  // Passe 1 : correspondance exacte (la plus fiable)
-  for (const [field, aliases] of rules) {
-    const aliasNorms = aliases.map(normalizeHeaderKey);
-    const idx = normalizedHeaders.findIndex((h, i) => !used.has(i) && aliasNorms.includes(h));
-    if (idx >= 0) {
-      map[field] = headers[idx];
-      used.add(idx);
-    }
-  }
-
-  // Passe 2 : correspondance « contient » (alias les plus longs d'abord, min 3 lettres)
-  for (const [field, aliases] of rules) {
-    if (map[field]) continue;
-    const aliasNorms = aliases.map(normalizeHeaderKey).sort((a, b) => b.length - a.length);
-    let matched = false;
-    for (const alias of aliasNorms) {
-      if (matched) break;
-      if (!alias || alias.length < 3) continue;
-      for (let i = 0; i < normalizedHeaders.length; i++) {
-        if (used.has(i)) continue;
-        if (normalizedHeaders[i].includes(alias)) {
-          map[field] = headers[i];
-          used.add(i);
-          matched = true;
-          break;
-        }
-      }
-    }
-  }
-
-  return map;
-}
+// La détection intelligente des colonnes (en-têtes + contenu + validation BDD)
+// est déléguée au service leadImportMapper.service.ts.
 
 // List
 router.get(
@@ -154,8 +133,12 @@ router.get(
       const status = typeof req.query.status === 'string' ? req.query.status.trim() : '';
       const pageRaw = typeof req.query.page === 'string' ? req.query.page : undefined;
       const limitRaw = typeof req.query.limit === 'string' ? req.query.limit : undefined;
+      const withoutCampaign =
+        String(req.query.withoutCampaign) === '1' ||
+        String(req.query.withoutCampaign) === 'true';
 
-      const hasServerQuery = !!search || !!status || !!pageRaw || !!limitRaw;
+      const hasServerQuery =
+        !!search || !!status || !!pageRaw || !!limitRaw || withoutCampaign;
 
       if (status && !allowedLeadStatuses.includes(status)) {
         return res.status(400).json({
@@ -179,6 +162,10 @@ router.get(
 
       if (status) {
         filters.push({ status });
+      }
+
+      if (withoutCampaign) {
+        filters.push({ campaignId: null });
       }
 
       if (search) {
@@ -442,7 +429,7 @@ router.get(
       res.json({
         data: {
           ...lead,
-          campaignId: String(lead.campaignId),
+          campaignId: lead.campaignId ? String(lead.campaignId) : '',
           assignedToId: lead.assignedToId ? String(lead.assignedToId) : '',
         },
       });
@@ -473,15 +460,10 @@ router.post(
         lostReason,
       } = req.body;
 
-      if (!campaignId) {
-        return res.status(400).json({ message: 'La campagne est obligatoire' });
-      }
-
       if (!name || !String(name).trim()) {
         return res.status(400).json({ message: 'Le nom est obligatoire' });
       }
 
-      const parsedCampaignId = toValidNumber(campaignId, 'campaignId');
       const normalizedStatus = normalizeLeadStatus(status);
       const currentUserId = Number(req.user!.userId);
 
@@ -492,13 +474,17 @@ router.post(
         });
       }
 
-      const campaign = await prisma.campaign.findUnique({
-        where: { id: parsedCampaignId },
-        select: { id: true, name: true },
-      });
-
-      if (!campaign) {
-        return res.status(404).json({ message: 'Campagne introuvable' });
+      // Campagne facultative : si fournie, elle doit exister en base.
+      let parsedCampaignId: number | null = null;
+      if (campaignId !== undefined && campaignId !== null && campaignId !== '') {
+        parsedCampaignId = toValidNumber(campaignId, 'campaignId');
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: parsedCampaignId },
+          select: { id: true, name: true },
+        });
+        if (!campaign) {
+          return res.status(404).json({ message: 'Campagne introuvable' });
+        }
       }
 
       const parsedAssignedToId =
@@ -628,15 +614,10 @@ router.put(
         lostReason,
       } = req.body;
 
-      if (!campaignId) {
-        return res.status(400).json({ message: 'La campagne est obligatoire' });
-      }
-
       if (!name || !String(name).trim()) {
         return res.status(400).json({ message: 'Le nom est obligatoire' });
       }
 
-      const parsedCampaignId = toValidNumber(campaignId, 'campaignId');
       const normalizedStatus = normalizeLeadStatus(status);
       const currentUserId = Number(req.user!.userId);
 
@@ -647,13 +628,17 @@ router.put(
         });
       }
 
-      const campaign = await prisma.campaign.findUnique({
-        where: { id: parsedCampaignId },
-        select: { id: true, name: true },
-      });
-
-      if (!campaign) {
-        return res.status(404).json({ message: 'Campagne introuvable' });
+      // Campagne facultative : si fournie, elle doit exister en base.
+      let parsedCampaignId: number | null = null;
+      if (campaignId !== undefined && campaignId !== null && campaignId !== '') {
+        parsedCampaignId = toValidNumber(campaignId, 'campaignId');
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: parsedCampaignId },
+          select: { id: true, name: true },
+        });
+        if (!campaign) {
+          return res.status(404).json({ message: 'Campagne introuvable' });
+        }
       }
 
       const parsedAssignedToId =
@@ -892,14 +877,22 @@ router.post(
         return res.status(400).json({ message: 'Aucun fichier fourni (champ "file").' });
       }
 
+      const dryRun = String(req.query.dryRun) === 'true';
+      const currentUserId = Number(req.user!.userId);
+      const campaignCache = new Map<string, { id: number; name: string }>();
+      const glpiCache = new Map<string, { id: number }>();
+
+      let headers: string[];
       let rows: Record<string, any>[];
+      let headerRowNumber = 1;
       try {
         const workbook = XLSX.read(file.buffer, { type: 'buffer' });
         const sheetName = workbook.SheetNames[0];
         if (!sheetName) throw new Error('Fichier vide');
-        rows = XLSX.utils.sheet_to_json<Record<string, any>>(workbook.Sheets[sheetName], {
-          defval: '',
-        });
+        const parsed = parseSheet(workbook.Sheets[sheetName]);
+        headers = parsed.headers;
+        rows = parsed.rows;
+        headerRowNumber = parsed.headerRowNumber;
       } catch {
         return res
           .status(400)
@@ -918,24 +911,108 @@ router.post(
           .json({ message: 'Trop de lignes (maximum 5000 par import).' });
       }
 
-      const headers = Object.keys(rows[0] ?? {});
-      const colMap = detectColumnMap(headers);
+      // ── Résolveurs BDD pour la validation croisée (détection campagne / GLPI) ──
+      const resolveCampaignIds = async (
+        values: string[],
+      ): Promise<Record<string, number>> => {
+        const result: Record<string, number> = {};
+        const numericIds: number[] = [];
+        const names: string[] = [];
+        for (const v of values) {
+          if (/^\d+$/.test(v)) numericIds.push(Number(v));
+          else names.push(v);
+        }
+        if (names.length > 0) {
+          const found = await prisma.campaign.findMany({
+            where: { name: { in: names } },
+            select: { id: true, name: true },
+          });
+          for (const c of found) result[c.name] = c.id;
+        }
+        if (numericIds.length > 0) {
+          const found = await prisma.campaign.findMany({
+            where: { id: { in: numericIds } },
+            select: { id: true },
+          });
+          for (const c of found) result[String(c.id)] = c.id;
+        }
+        return result;
+      };
 
-      if (!colMap.name || !colMap.campaign) {
+      const resolveGlpiUserIds = async (
+        values: string[],
+      ): Promise<Record<string, number>> => {
+        const result: Record<string, number> = {};
+        const numericIds: number[] = [];
+        const usernames: string[] = [];
+        for (const v of values) {
+          if (/^\d+$/.test(v)) numericIds.push(Number(v));
+          else usernames.push(v);
+        }
+        if (usernames.length > 0) {
+          const found = await prisma.glpiUser.findMany({
+            where: { username: { in: usernames } },
+            select: { id: true, username: true },
+          });
+          for (const u of found) {
+            if (u.username) result[u.username] = u.id;
+          }
+        }
+        if (numericIds.length > 0) {
+          const found = await prisma.glpiUser.findMany({
+            where: { id: { in: numericIds } },
+            select: { id: true },
+          });
+          for (const u of found) result[String(u.id)] = u.id;
+        }
+        return result;
+      };
+
+      // ── Détection intelligente des colonnes ──
+      // L'UI peut fournir un mapping explicite (colonnes source → champs).
+      // Sinon, le moteur combine en-têtes + contenu + validation BDD.
+      const providedMapping = parseMappingOverride(req.body?.mapping, headers);
+
+      let colMap: Record<string, string | undefined> = {};
+      let confidence: Record<string, number> = {};
+      let candidates: Record<string, ColumnCandidate[]> = {};
+
+      if (providedMapping) {
+        colMap = providedMapping;
+      } else {
+        const detection: ColumnDetectionResult = await detectColumnMap(headers, rows, {
+          resolveCampaignIds,
+          resolveGlpiUserIds,
+        });
+        colMap = detection.colMap as Record<string, string | undefined>;
+        confidence = detection.confidence as Record<string, number>;
+        candidates = detection.candidates as Record<string, ColumnCandidate[]>;
+      }
+
+      // ── Campagne par défaut (fallback si la colonne Campagne est absente) ──
+      const defaultCampaignIdRaw = String(req.body?.defaultCampaignId ?? '').trim();
+      let defaultCampaign: { id: number; name: string } | null = null;
+      if (defaultCampaignIdRaw) {
+        const id = toValidNumber(defaultCampaignIdRaw, 'defaultCampaignId');
+        defaultCampaign = await prisma.campaign.findUnique({
+          where: { id },
+          select: { id: true, name: true },
+        });
+        if (!defaultCampaign) {
+          return res.status(400).json({ message: 'Campagne par défaut introuvable.' });
+        }
+      }
+
+      if (!colMap.name) {
         return res.status(400).json({
           message:
-            'Colonnes requises introuvables. Colonnes attendues : Campagne (nom ou id), Nom, Email, Téléphone, Statut, Utilisateur GLPI, Notes.',
+            'Colonne "Nom" introuvable. Impossible d\'importer des leads sans nom.',
         });
       }
 
-      const dryRun = String(req.query.dryRun) === 'true';
-      const currentUserId = Number(req.user!.userId);
-      const campaignCache = new Map<string, { id: number; name: string }>();
-      const glpiCache = new Map<string, { id: number }>();
-
       const resolveCampaign = async (ref: string) => {
         const key = String(ref).trim();
-        if (!key) return null;
+        if (!key) return defaultCampaign;
         if (campaignCache.has(key)) return campaignCache.get(key)!;
         let campaign: { id: number; name: string } | null = null;
         if (/^\d+$/.test(key)) {
@@ -997,7 +1074,7 @@ router.post(
             duplicate: boolean;
             data: {
               name: string;
-              campaignId: number;
+              campaignId: number | null;
               email: string | null;
               phone: string | null;
               status: string;
@@ -1017,9 +1094,18 @@ router.post(
         const name = cell('name');
         if (!name) return { ok: false, message: 'Nom manquant' };
 
-        const campaign = await resolveCampaign(cell('campaign'));
-        if (!campaign) {
-          return { ok: false, message: `Campagne introuvable : "${cell('campaign')}"` };
+        // Campagne facultative : cellule vide → sans campagne (ou campagne par
+        // défaut). Valeur fournie mais inconnue → erreur (pas d'import silencieux).
+        const campaignRef = cell('campaign');
+        let campaignId: number | null = null;
+        if (campaignRef) {
+          const campaign = await resolveCampaign(campaignRef);
+          if (!campaign) {
+            return { ok: false, message: `Campagne introuvable : "${campaignRef}"` };
+          }
+          campaignId = campaign.id;
+        } else if (defaultCampaign) {
+          campaignId = defaultCampaign.id;
         }
 
         const statusRaw = cell('status') || 'NOUVEAU';
@@ -1049,7 +1135,7 @@ router.post(
 
         const data = {
           name,
-          campaignId: campaign.id,
+          campaignId,
           email: email || null,
           phone: phone || null,
           status: normalizedStatus,
@@ -1063,7 +1149,7 @@ router.post(
         if (phone) dupFilters.push({ phone });
         if (dupFilters.length > 0) {
           const existing = await db.lead.findFirst({
-            where: { campaignId: campaign.id, OR: dupFilters },
+            where: { campaignId, OR: dupFilters },
             select: { id: true },
           });
           if (existing) return { ok: true, duplicate: true, data };
@@ -1074,9 +1160,12 @@ router.post(
 
       // Aperçu : 8 premières lignes telles que détectées
       const preview = rows.slice(0, 8).map((row, i) => ({
-        row: i + 2,
+        row: headerRowNumber + 1 + i,
         values: Object.fromEntries(
           fieldLabels.map(([field, label]) => {
+            if (field === 'campaign' && !colMap.campaign) {
+              return [label, defaultCampaign?.name ?? ''];
+            }
             const header = colMap[field];
             const v = header ? row[header] : '';
             return [label, v === undefined || v === null ? '' : String(v).trim()];
@@ -1090,9 +1179,10 @@ router.post(
         let skipped = 0;
         const errors: Array<{ row: number; message: string }> = [];
         for (let i = 0; i < rows.length; i++) {
-          const result = await validateRow(rows[i], i + 2, prisma);
-          if (!result.ok) errors.push({ row: i + 2, message: result.message });
-          else if (result.duplicate) skipped += 1;
+          const result = await validateRow(rows[i], headerRowNumber + 1 + i, prisma);
+          if (!result.ok) {
+            errors.push({ row: headerRowNumber + 1 + i, message: result.message });
+          } else if (result.duplicate) skipped += 1;
           else valid += 1;
         }
 
@@ -1109,6 +1199,11 @@ router.post(
                 header,
               })),
               missingRequired: ['name', 'campaign'].filter((f) => !colMap[f]),
+              confidence,
+              candidates,
+              headers,
+              headerRowNumber,
+              campaignRequired: !colMap.campaign && !defaultCampaign,
             },
             preview,
           },
@@ -1123,7 +1218,7 @@ router.post(
         const errors: Array<{ row: number; message: string }> = [];
 
         for (let i = 0; i < rows.length; i++) {
-          const rowNumber = i + 2;
+          const rowNumber = headerRowNumber + 1 + i;
           const validated = await validateRow(rows[i], rowNumber, txAny);
 
           if (!validated.ok) {
@@ -1137,7 +1232,10 @@ router.post(
           }
 
           const createdLead: any = await txAny.lead.create({
-            data: validated.data,
+            data: {
+              ...validated.data,
+              createdById: currentUserId,
+            },
           });
 
           await txAny.leadActivity.create({

@@ -47,8 +47,7 @@ export default function LeadsPage() {
         {
           key: 'campaignId',
           label: 'Campagne',
-          render: (_: any, row: any) =>
-            row.campaign?.name || `#${row.campaignId ?? ''}`,
+          render: (_: any, row: any) => row.campaign?.name || '—',
         },
         { key: 'email', label: 'Email' },
         { key: 'phone', label: 'Téléphone' },
@@ -92,6 +91,11 @@ export default function LeadsPage() {
             { label: 'Perdu', value: 'PERDU' },
             { label: 'Invalide', value: 'INVALIDE' },
           ],
+        },
+        {
+          key: 'withoutCampaign',
+          label: 'Campagne',
+          options: [{ label: 'Sans campagne', value: '1' }],
         },
       ]}
       refreshKey={refreshKey}

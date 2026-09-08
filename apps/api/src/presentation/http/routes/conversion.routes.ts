@@ -366,7 +366,7 @@ router.get(
         data: {
           ...conversion,
           leadId: String(conversion.leadId),
-          campaignId: String(conversion.campaignId),
+          campaignId: conversion.campaignId ? String(conversion.campaignId) : '',
         },
       });
     } catch (error) {

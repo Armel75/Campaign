@@ -3,6 +3,11 @@ import {
   getSalesAmountByArticle,
   ArticleCodeRef,
 } from './x3Sales.service';
+import { mapLimit } from '../infrastructure/utils/async';
+import {
+  TtlCache,
+  DASHBOARD_CACHE_TTL_MS,
+} from '../infrastructure/cache/ttlCache';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -84,7 +89,18 @@ const MONTH_LABELS = [
 // Service principal
 // ---------------------------------------------------------------------------
 
+const strategicSummaryCache = new TtlCache(DASHBOARD_CACHE_TTL_MS);
+
 export async function getStrategicDashboardSummary(): Promise<StrategicDashboardSummary> {
+  const cached = strategicSummaryCache.get<StrategicDashboardSummary>('strategic-summary');
+  if (cached) return cached;
+
+  const summary = await computeStrategicDashboardSummary();
+  strategicSummaryCache.set('strategic-summary', summary);
+  return summary;
+}
+
+async function computeStrategicDashboardSummary(): Promise<StrategicDashboardSummary> {
   // ── 1. Récupérer toutes les campagnes avec leurs relations ──────────────
   const campaigns = await prisma.campaign.findMany({
     select: {
@@ -326,46 +342,53 @@ export async function getStrategicDashboardSummary(): Promise<StrategicDashboard
   }
 
   // ── 3. Revenus X3 par objectif ─────────────────────────────────────────
-  // On enrichit chaque objectif avec les revenus réels depuis Sage X3
-  const profitabilityByObjective: ProfitabilityByObjective[] = [];
-  for (const [objId, objEntry] of objectiveMap) {
-    let x3Revenue = 0;
-    if (objEntry.articleRefs.length > 0 && objEntry.startDate && objEntry.endDate) {
-      try {
-        const effectiveEnd =
-          objEntry.endDate > new Date() ? new Date() : objEntry.endDate;
-        const salesAmounts = await getSalesAmountByArticle(
-          objEntry.articleRefs,
-          objEntry.startDate,
-          effectiveEnd,
-        );
-        x3Revenue = Object.values(salesAmounts).reduce((s, v) => s + v, 0);
-      } catch {
-        // Silently fail — les données X3 ne sont pas critiques
-      }
+  // On enrichit chaque objectif avec les revenus réels depuis Sage X3.
+  // Les appels X3 sont PARALLÉLISÉS (concurrence limitée, pool X3 max 10).
+  const objectiveEntries = Array.from(objectiveMap.entries());
+  const x3Revenues = await mapLimit(objectiveEntries, 5, async ([, objEntry]) => {
+    if (objEntry.articleRefs.length === 0 || !objEntry.startDate || !objEntry.endDate) {
+      return 0;
     }
+    try {
+      const effectiveEnd =
+        objEntry.endDate > new Date() ? new Date() : objEntry.endDate;
+      const salesAmounts = await getSalesAmountByArticle(
+        objEntry.articleRefs,
+        objEntry.startDate,
+        effectiveEnd,
+      );
+      return Object.values(salesAmounts).reduce((s, v) => s + v, 0);
+    } catch {
+      // Silently fail — les données X3 ne sont pas critiques
+      return 0;
+    }
+  });
 
-    const totalRevenue = objEntry.totalRevenue + x3Revenue;
-    const totalProfit = totalRevenue - objEntry.totalCost;
-    const roiPercent =
-      objEntry.totalCost > 0
-        ? roundTo2(((totalRevenue - objEntry.totalCost) / objEntry.totalCost) * 100)
-        : totalRevenue > 0
-          ? null // Revenu sans coût → non calculable
-          : null;
+  const profitabilityByObjective: ProfitabilityByObjective[] = objectiveEntries.map(
+    ([objId, objEntry], index) => {
+      const x3Revenue = x3Revenues[index] ?? 0;
+      const totalRevenue = objEntry.totalRevenue + x3Revenue;
+      const totalProfit = totalRevenue - objEntry.totalCost;
+      const roiPercent =
+        objEntry.totalCost > 0
+          ? roundTo2(((totalRevenue - objEntry.totalCost) / objEntry.totalCost) * 100)
+          : totalRevenue > 0
+            ? null // Revenu sans coût → non calculable
+            : null;
 
-    profitabilityByObjective.push({
-      objectiveId: objId,
-      objectiveCode: objEntry.objectiveCode,
-      objectiveLabel: objEntry.objectiveLabel,
-      campaignCount: objEntry.campaignCount,
-      totalBudget: roundTo2(objEntry.totalBudget),
-      totalRevenueFromConversions: roundTo2(objEntry.totalRevenue),
-      totalCost: roundTo2(objEntry.totalCost),
-      totalProfit: roundTo2(totalProfit),
-      roiPercent,
-    });
-  }
+      return {
+        objectiveId: objId,
+        objectiveCode: objEntry.objectiveCode,
+        objectiveLabel: objEntry.objectiveLabel,
+        campaignCount: objEntry.campaignCount,
+        totalBudget: roundTo2(objEntry.totalBudget),
+        totalRevenueFromConversions: roundTo2(objEntry.totalRevenue),
+        totalCost: roundTo2(objEntry.totalCost),
+        totalProfit: roundTo2(totalProfit),
+        roiPercent,
+      };
+    },
+  );
 
   // ── 4. Coûts d'acquisition ─────────────────────────────────────────────
   const costPerLead =

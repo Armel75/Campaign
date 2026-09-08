@@ -6,3 +6,5 @@ coverage/
 *.log
 .env*
 !.env.example
+# Kimi project memory
+.kimi-memory/

@@ -507,7 +507,7 @@ router.patch('/:id/status', requireAuth, async (req, res, next) => {
 
 // Get One
 // Export Excel (premium)
-import { exportCampaignToExcel, exportMultipleCampaignsToExcel } from '../../../services/campaignExport.service';
+import { exportCampaignToExcel, exportMultipleCampaignsToExcel, getCampaignSalesLast3Months, CampaignMonthlySales } from '../../../services/campaignExport.service';
 
 router.get('/:id/export-excel', requireAuth, async (req, res, next) => {
   try {
@@ -625,6 +625,55 @@ router.get('/:id/sales-amounts', requireAuth, async (req, res, next) => {
     );
 
     res.json({ data: salesAmounts });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Ventes des 3 derniers mois précédant le début de campagne (page détail)
+router.get('/:id/sales-last-3-months', requireAuth, async (req, res, next) => {
+  try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    const campaignId = toValidNumber(req.params.id, 'campaignId');
+    const campaignOwnership = await getCampaignOr404(campaignId, res);
+    if (!campaignOwnership) return;
+
+    const data = await getCampaignSalesLast3Months(campaignId);
+    res.json({ data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Route batch : ventes des 3 derniers mois par campagne (tableau de bord)
+router.post('/sales-last-3-months', requireAuth, async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const campaignIds: number[] = Array.isArray(body.campaignIds)
+      ? body.campaignIds.map(Number).filter((id: number) => !isNaN(id))
+      : [];
+
+    if (campaignIds.length === 0) {
+      return res.json({ data: {} });
+    }
+
+    const results: Record<number, CampaignMonthlySales> = {};
+    const errors: Record<number, boolean> = {};
+
+    // Traitement séquentiel pour éviter la saturation du pool X3 (max 10 connexions)
+    for (const campaignId of [...new Set(campaignIds)]) {
+      try {
+        results[campaignId] = await getCampaignSalesLast3Months(campaignId);
+      } catch (error) {
+        console.error(`Erreur ventes 3 mois campagne ${campaignId}:`, error);
+        errors[campaignId] = true;
+      }
+    }
+
+    res.json({ data: results, errors });
   } catch (error) {
     next(error);
   }

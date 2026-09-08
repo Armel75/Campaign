@@ -344,14 +344,14 @@ export default function CampaignList() {
             <Button
               variant="outline"
               onClick={() => handleExportExcel()}
-              title="Exporter en Excel"
+              title="Filtrer et exporter les campagnes en Excel"
               className="ml-2"
               disabled={!exportStartDate || !exportEndDate || exportingBatch}
             >
               {exportingBatch ? (
                 <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Export en cours…</>
               ) : (
-                <><FileSpreadsheet className="mr-2 h-4 w-4" /> Export Excel</>
+                <><FileSpreadsheet className="mr-2 h-4 w-4" /> Filtrer & Exporter campagne Excel</>
               )}
             </Button>
           </div>

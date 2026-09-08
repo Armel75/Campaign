@@ -235,6 +235,94 @@ export async function getSoldQuantitiesByArticle(
   });
 }
 
+export interface MonthlyQuantityByArticleMap {
+  [articleId: number]: Record<string, number>;
+}
+
+/**
+ * Quantités vendues par article, ventilées par mois (clé 'YYYY-MM').
+ * Source : VENTE_VENDEUR_CLIENT (CODE SAGE_100 / REFERENCE, DATE_FACTURE).
+ * Une seule requête GROUP BY mois (optimale vs 3 appels séparés).
+ * Les articles sans vente sur la période n'apparaissent pas (→ 0 par défaut).
+ */
+export async function getMonthlySoldQuantitiesByArticle(
+  articleRefs: ArticleCodeRef[],
+  startDate: SqlDateInput,
+  endDate: SqlDateInput,
+): Promise<MonthlyQuantityByArticleMap> {
+  const start = toJsDate(startDate);
+  const end = toJsDate(endDate);
+
+  if (start > end) {
+    throw new Error('startDate must be before or equal to endDate');
+  }
+
+  const normalizedArticleRefs = normalizeArticleRefs(articleRefs);
+  if (normalizedArticleRefs.length === 0) {
+    return {};
+  }
+
+  const pool = await getX3Pool();
+  const resultMap: MonthlyQuantityByArticleMap = {};
+  const chunks = splitIntoChunks(normalizedArticleRefs, 200);
+
+  for (const chunk of chunks) {
+    const request = pool.request();
+    const valuesClause = buildArticleRefsValuesClause(request, chunk);
+
+    request.input('startDate', sql.DateTime2, start);
+    request.input('endDate', sql.DateTime2, end);
+
+    const query = `
+      WITH article_refs (articleId, codeSage100, codeSageX3) AS (
+        SELECT *
+        FROM (VALUES
+          ${valuesClause}
+        ) AS v(articleId, codeSage100, codeSageX3)
+      )
+      SELECT
+        ar.articleId,
+        YEAR(src.[DATE_FACTURE]) AS saleYear,
+        MONTH(src.[DATE_FACTURE]) AS saleMonth,
+        SUM(CAST(ISNULL(src.[QUANTITE], 0) AS DECIMAL(18, 4))) AS totalQuantity
+      FROM article_refs ar
+      LEFT JOIN dbo.VENTE_VENDEUR_CLIENT src
+        ON (
+          (ar.codeSage100 IS NOT NULL
+            AND UPPER(LTRIM(RTRIM(CAST(ISNULL(src.[CODE SAGE_100], '') AS VARCHAR(1000))))) = ar.codeSage100)
+          OR
+          (ar.codeSageX3 IS NOT NULL
+            AND UPPER(LTRIM(RTRIM(CAST(ISNULL(src.[REFERENCE], '') AS VARCHAR(1000))))) = ar.codeSageX3)
+        )
+        AND CAST(src.[DATE_FACTURE] AS DATE) >= CAST(@startDate AS DATE)
+        AND CAST(src.[DATE_FACTURE] AS DATE) <= CAST(@endDate AS DATE)
+      GROUP BY ar.articleId, YEAR(src.[DATE_FACTURE]), MONTH(src.[DATE_FACTURE])
+    `;
+
+    const response = await request.query(query);
+
+    for (const row of response.recordset) {
+      const articleId = Number(row.articleId);
+      if (!Number.isInteger(articleId)) continue;
+
+      // Ligne LEFT JOIN sans vente sur la période → saleYear/saleMonth NULL → ignorée
+      // (attention : Number(null) === 0, donc test explicite sur null/undefined)
+      if (row.saleYear === null || row.saleYear === undefined || row.saleMonth === null || row.saleMonth === undefined) {
+        continue;
+      }
+
+      const saleYear = Number(row.saleYear);
+      const saleMonth = Number(row.saleMonth);
+
+      const monthKey = `${saleYear}-${String(saleMonth).padStart(2, '0')}`;
+      if (!resultMap[articleId]) resultMap[articleId] = {};
+      resultMap[articleId][monthKey] = Number(row.totalQuantity ?? 0);
+    }
+  }
+
+  return resultMap;
+}
+
 /**
  * Stock global actuel de l'article.
  * Somme sur tous les sites.

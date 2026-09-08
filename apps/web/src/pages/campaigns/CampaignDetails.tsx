@@ -270,6 +270,9 @@ export default function CampaignDetails() {
   const [roiLoading, setRoiLoading] = useState(true);
   const [unitPrices, setUnitPrices] = useState<Record<string, number>>({});
   const [kpiModalOpen, setKpiModalOpen] = useState(false);
+  const [monthlySales, setMonthlySales] = useState<
+    Array<{ key: string; monthLabel: string; quantity: number }> | null
+  >(null);
 
   const fetchCampaign = async () => {
     try {
@@ -317,6 +320,18 @@ export default function CampaignDetails() {
     }).catch(() => {
       // Silence: les montants ne sont pas bloquants
     });
+  }, [id]);
+
+  // Ventes des 3 derniers mois précédant le début de campagne (non bloquant)
+  useEffect(() => {
+    if (!id) return;
+    api.get(`/campaigns/${id}/sales-last-3-months`)
+      .then(res => {
+        setMonthlySales(res.data?.data?.months ?? []);
+      })
+      .catch(() => {
+        setMonthlySales([]);
+      });
   }, [id]);
 
   const attachments = useMemo(() => campaign?.attachments || [], [campaign]);
@@ -571,7 +586,7 @@ export default function CampaignDetails() {
       icon: Package,
     },
     {
-      label: 'Qté totale vendu',
+      label: 'Qté totale vendu (actuelle)',
       value: totalSold > 0 ? totalSold.toLocaleString('fr-FR') : '—',
       icon: ShoppingCart,
       kpiName: 'SOLD_QUANTITY',
@@ -762,6 +777,55 @@ export default function CampaignDetails() {
                 </div>
               </div>
             </div>
+
+            {/* Ventes des 3 mois précédant la campagne */}
+            <Card>
+              <CardContent className="p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      Ventes des 3 mois précédant la campagne
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Historique des ventes mensuelles et moyenne calculée sur les 3 mois avant le début de la campagne
+                    </p>
+                  </div>
+                  {monthlySales === null && (
+                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                  )}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  {(monthlySales ?? []).map((item) => (
+                    <div
+                      key={item.key}
+                      className="text-center rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 p-3.5 flex flex-col justify-center"
+                    >
+                      <p className="text-xs font-bold uppercase tracking-wide text-primary">
+                        VENTE {item.monthLabel}
+                      </p>
+                      <p className="text-2xl font-bold mt-1 text-slate-900 dark:text-slate-100">
+                        {item.quantity != null ? Number(item.quantity).toLocaleString('fr-FR') : '—'}
+                      </p>
+                    </div>
+                  ))}
+                  <div
+                    className="text-center rounded-xl border border-primary/20 bg-primary/5 dark:bg-primary/10 p-3.5 flex flex-col justify-center relative overflow-hidden"
+                    title="Moyenne des ventes des 3 mois précédant le début de la campagne"
+                  >
+                    <p className="text-xs font-bold uppercase tracking-wide text-primary">
+                      MOYENNE DES 3 MOIS (PRÉ-CAMPAGNE)
+                    </p>
+                    <p className="text-2xl font-bold mt-1 text-primary">
+                      {monthlySales?.length
+                        ? Number(
+                            monthlySales.reduce((sum, item) => sum + (item.quantity ?? 0), 0) / monthlySales.length
+                          ).toLocaleString('fr-FR', { maximumFractionDigits: 1 })
+                        : '—'}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
             {isCompletedCampaign && (
               <Card className="border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900">

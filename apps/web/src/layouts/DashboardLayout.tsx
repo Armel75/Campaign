@@ -13,26 +13,28 @@ import {
   ListTodo,
   Share2,
   ChevronDown,
-  PanelLeftClose,
-  PanelLeftOpen,
   Archive,
   TrendingUp,
   ShoppingCart,
   Radar,
   CalendarClock,
   Headset,
+  Shield,
 } from 'lucide-react';
 import NotificationBell from '@/components/NotificationBell';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/mode-toggle';
-import { useState } from 'react';
-import { Shield } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
-const SidebarItem = ({
+const NavItem = ({
   icon: Icon,
   label,
   to,
-  isCollapsed,
   highlighted,
   disabled,
   badge,
@@ -40,7 +42,6 @@ const SidebarItem = ({
   icon: any;
   label: string;
   to: string;
-  isCollapsed: boolean;
   highlighted?: boolean;
   disabled?: boolean;
   badge?: string;
@@ -61,34 +62,29 @@ const SidebarItem = ({
     <Button
       variant={isActive ? 'secondary' : 'ghost'}
       disabled={disabled}
+      size="sm"
       className={cn(
-        'w-full font-normal transition-all',
-        isCollapsed ? 'justify-center px-2' : 'justify-start',
+        'h-9 font-normal transition-all whitespace-nowrap',
         isActive && 'bg-secondary font-medium',
-        highlighted && !isCollapsed && 'border-l-2 border-primary bg-primary/5 font-medium text-primary',
-        highlighted && isCollapsed && 'ring-1 ring-primary ring-inset',
+        highlighted && 'border-b-2 border-primary bg-primary/5 font-medium text-primary',
         disabled && 'opacity-50'
       )}
-      title={isCollapsed ? label : undefined}
+      title={label}
     >
-      <Icon className={cn('h-4 w-4 shrink-0', !isCollapsed && 'mr-2')} />
-      {!isCollapsed && (
-        <span className="flex flex-col items-start gap-1 min-w-0">
-          <span className="flex items-center gap-2 min-w-0 w-full">
-            <span className="truncate">{label}</span>
-            {highlighted && (
-              <span className="shrink-0 inline-flex items-center rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary uppercase tracking-wider">
-                DG
-              </span>
-            )}
+      <Icon className="h-4 w-4 shrink-0 mr-2" />
+      <span className="flex items-center gap-1.5">
+        <span>{label}</span>
+        {highlighted && (
+          <span className="shrink-0 inline-flex items-center rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary uppercase tracking-wider">
+            DG
           </span>
-          {badge && (
-            <span className="shrink-0 inline-flex items-center rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary uppercase tracking-wider">
-              {badge}
-            </span>
-          )}
-        </span>
-      )}
+        )}
+        {badge && (
+          <span className="shrink-0 inline-flex items-center rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary uppercase tracking-wider">
+            {badge}
+          </span>
+        )}
+      </span>
     </Button>
   );
 
@@ -101,8 +97,6 @@ const SidebarItem = ({
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { logout, user } = useAuth();
-  const [isSettingsOpen, setIsSettingsOpen] = useState(true);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   const permissions = user?.permissions;
 
@@ -121,362 +115,271 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     canViewSettings || canManageUsers || canManageRoles;
 
   return (
-    <div className="flex min-h-screen bg-background">
-      <aside
-        className={cn(
-          'border-r bg-card hidden md:flex flex-col transition-all duration-300',
-          isSidebarCollapsed ? 'w-20' : 'w-64'
-        )}
-      >
-        <div
-          className={cn(
-            'p-4 border-b flex items-center',
-            isSidebarCollapsed ? 'justify-center' : 'justify-between gap-2'
-          )}
-        >
-          <div
-            className={cn(
-              'flex items-center',
-              isSidebarCollapsed ? 'justify-center' : 'gap-2 min-w-0'
-            )}
-          >
-            <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center text-primary-foreground font-bold shrink-0">
-              CM
-            </div>
-            {!isSidebarCollapsed && (
-              <h1 className="text-xl font-bold tracking-tight truncate">Campagne</h1>
-            )}
+    <div className="flex flex-col h-screen bg-background">
+      {/* Top horizontal navbar — compact Outlook style */}
+      <header className="sticky top-0 z-50 border-b bg-card shrink-0">
+
+        {/* Ligne supérieure : actions utilisateur */}
+        <div className="flex items-center justify-end gap-2 px-3 py-2 border-b">
+          
+          {/* Notifications */}
+          <NotificationBell labeled />
+
+          {/* Thème */}
+          <div className="flex items-center gap-1.5 whitespace-nowrap">
+            <span className="text-sm">
+              Thème
+            </span>
+            <ModeToggle />
           </div>
 
-          {!isSidebarCollapsed && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={() => setIsSidebarCollapsed(true)}
-              className="shrink-0"
-            >
-              <PanelLeftClose className="h-4 w-4" />
-            </Button>
-          )}
+          {/* Modifier mot de passe */}
+          <ChangePasswordModal
+            trigger={
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 font-normal whitespace-nowrap"
+              >
+                <Settings className="h-4 w-4 mr-2" />
+                Modifier mot de passe
+              </Button>
+            }
+          />
+
+          {/* Profil */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                className="relative h-9 px-2 gap-2"
+              >
+                <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-medium text-xs">
+                  {user?.username?.substring(0, 2).toUpperCase()}
+                </div>
+
+                <div className="flex items-center gap-1.5 whitespace-nowrap">
+                  <span className="text-sm font-medium">
+                    {user?.username}
+                  </span>
+
+                  <span className="text-xs text-muted-foreground">
+                    ({user?.role})
+                  </span>
+                </div>
+
+                <ChevronDown className="h-3 w-3 opacity-50" />
+              </Button>
+            </DropdownMenuTrigger>
+
+            <DropdownMenuContent align="end" className="w-56">
+              {/* options du profil */}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Déconnexion */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={logout}
+            className="h-9 font-normal text-destructive hover:text-destructive whitespace-nowrap"
+          >
+            <LogOut className="h-4 w-4 mr-2" />
+            Déconnexion
+          </Button>
+
         </div>
 
-        {isSidebarCollapsed && (
-          <div className="p-2 border-b flex justify-center">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={() => setIsSidebarCollapsed(false)}
-            >
-              <PanelLeftOpen className="h-4 w-4" />
-            </Button>
-          </div>
-        )}
 
-        <nav
-          className={cn(
-            'flex-1 overflow-y-auto',
-            isSidebarCollapsed ? 'p-2 space-y-2' : 'p-4 space-y-1'
-          )}
-        >
-          <div className="mb-4">
-            {!isSidebarCollapsed && (
-              <p className="px-4 text-xs font-semibold text-muted-foreground uppercase mb-2 tracking-wider">
-                Main
-              </p>
-            )}
+        {/* Ligne principale : navigation */}
+        <div className="px-3 py-2">
 
+          <nav className="flex flex-wrap items-center gap-1">
+            
             {canViewDashboard && (
-              <SidebarItem
+              <NavItem
                 icon={LayoutDashboard}
                 label="Tableau de bord"
                 to="/"
-                isCollapsed={isSidebarCollapsed}
               />
             )}
 
             {canViewStrategicDashboard && (
-              <SidebarItem
+              <NavItem
                 icon={TrendingUp}
                 label="Pilotage stratégique DG"
                 to="/strategic"
-                isCollapsed={isSidebarCollapsed}
                 highlighted
               />
             )}
 
             {canViewStrategicDashboard && (
-              <SidebarItem
+              <NavItem
                 icon={BarChart3}
                 label="Rentabilité"
                 to="/profitability"
-                isCollapsed={isSidebarCollapsed}
               />
             )}
 
             {canViewCampaigns && (
               <>
-                <SidebarItem
+                <NavItem
                   icon={CalendarClock}
                   label="Campagnes planifiées"
                   to="/campaigns?status=PLANIFIEE"
-                  isCollapsed={isSidebarCollapsed}
                 />
 
-                <SidebarItem
+                <NavItem
                   icon={Megaphone}
                   label="Campagne"
                   to="/campaigns"
-                  isCollapsed={isSidebarCollapsed}
                 />
 
-                <SidebarItem
+                <NavItem
                   icon={Archive}
                   label="Archives"
                   to="/campaigns?status=TERMINEE"
-                  isCollapsed={isSidebarCollapsed}
                 />
 
-                <SidebarItem
+                <NavItem
                   icon={ShoppingCart}
                   label="Ventes Campagnes"
                   to="/campaign-sales"
-                  isCollapsed={isSidebarCollapsed}
                 />
               </>
             )}
 
             {canDeleteAllCampaigns && (
-              <SidebarItem
+              <NavItem
                 icon={Target}
                 label="Objectif"
                 to="/objectives"
-                isCollapsed={isSidebarCollapsed}
               />
             )}
 
             {canViewTasks && (
-              <SidebarItem
+              <NavItem
                 icon={ListTodo}
                 label="Tâche Campagne"
                 to="/tasks"
-                isCollapsed={isSidebarCollapsed}
               />
             )}
 
             {canViewLeads && (
               <>
-                <SidebarItem
+                <NavItem
                   icon={BarChart3}
                   label="Leads"
                   to="/leads"
-                  isCollapsed={isSidebarCollapsed}
                 />
-                <SidebarItem
+
+                <NavItem
                   icon={TrendingUp}
                   label="Conversions"
                   to="/conversions"
-                  isCollapsed={isSidebarCollapsed}
                 />
               </>
             )}
 
-            {/* Placeholders publics (grisés) — visibles par tout le monde */}
-            <SidebarItem
+            {/* Campagne de prospection */}
+            <NavItem
               icon={Radar}
               label="Campagne de prospection"
               to="/campaign-prospecting"
-              isCollapsed={isSidebarCollapsed}
               disabled
               badge="A FAIRE"
             />
-            <SidebarItem
+
+            {/* Suivi clientèle */}
+            <NavItem
               icon={Headset}
               label="Suivi clientèle"
               to="/customer-followup"
-              isCollapsed={isSidebarCollapsed}
               disabled
               badge="A FAIRE"
             />
-          </div>
 
-          {showSettingsBlock && (
-            <div>
-              {!isSidebarCollapsed ? (
-                <>
+            {/* Paramètres */}
+            {showSettingsBlock && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
                   <Button
-                    variant="outline"
-                    className="w-full justify-between px-4 mb-2 font-medium border bg-muted/40 hover:bg-muted transition-all"
-                    onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+                    variant="ghost"
+                    size="sm"
+                    className="h-9 font-normal"
                   >
-                    <span className="flex items-center gap-2">
-                      <Settings className="h-4 w-4" />
-                      Paramétrage
-                    </span>
+                    <Settings className="h-4 w-4 mr-2" />
 
-                    <ChevronDown
-                      className={cn(
-                        'h-4 w-4 transition-transform duration-200',
-                        isSettingsOpen ? 'rotate-180' : 'rotate-0'
-                      )}
-                    />
+                    Paramètres
+
+                    <ChevronDown className="h-3 w-3 ml-1 opacity-50" />
                   </Button>
+                </DropdownMenuTrigger>
 
-                  <div
-                    className={cn(
-                      'space-y-1 overflow-hidden transition-all duration-300 ease-in-out',
-                      isSettingsOpen ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'
-                    )}
-                  >
-                    {canViewSettings && (
-                      <>
-                        <SidebarItem
-                          icon={Share2}
-                          label="Canal de communication"
-                          to="/channels"
-                          isCollapsed={isSidebarCollapsed}
-                        />
-                        <SidebarItem
-                          icon={Users}
-                          label="Audience cible"
-                          to="/target-audiences"
-                          isCollapsed={isSidebarCollapsed}
-                        />
-                      </>
-                    )}
+                <DropdownMenuContent align="end" className="w-56">
 
-                    {canManageUsers && (
-                      <SidebarItem
-                        icon={Users}
-                        label="Utilisateurs"
-                        to="/users"
-                        isCollapsed={isSidebarCollapsed}
-                      />
-                    )}
-
-                    {canManageRoles && (
-                      <SidebarItem
-                        icon={Shield}
-                        label="Rôles"
-                        to="/roles"
-                        isCollapsed={isSidebarCollapsed}
-                      />
-                    )}
-                  </div>
-                </>
-              ) : (
-                <div className="space-y-1">
                   {canViewSettings && (
                     <>
-                      <SidebarItem
-                        icon={Share2}
-                        label="Channels"
-                        to="/channels"
-                        isCollapsed={isSidebarCollapsed}
-                      />
-                      <SidebarItem
-                        icon={Users}
-                        label="Audiences"
-                        to="/target-audiences"
-                        isCollapsed={isSidebarCollapsed}
-                      />
+                      <DropdownMenuItem asChild>
+                        <Link
+                          to="/channels"
+                          className="flex items-center gap-2 cursor-pointer"
+                        >
+                          <Share2 className="mr-2 h-4 w-4" />
+                          Canaux de communication
+                        </Link>
+                      </DropdownMenuItem>
+
+                      <DropdownMenuItem asChild>
+                        <Link
+                          to="/target-audiences"
+                          className="flex items-center gap-2 cursor-pointer"
+                        >
+                          <Users className="mr-2 h-4 w-4" />
+                          Audience cible
+                        </Link>
+                      </DropdownMenuItem>
                     </>
                   )}
 
                   {canManageUsers && (
-                    <SidebarItem
-                      icon={Users}
-                      label="Utilisateurs"
-                      to="/users"
-                      isCollapsed={isSidebarCollapsed}
-                    />
+                    <DropdownMenuItem asChild>
+                      <Link
+                        to="/users"
+                        className="flex items-center gap-2 cursor-pointer"
+                      >
+                        <Users className="mr-2 h-4 w-4" />
+                        Utilisateurs
+                      </Link>
+                    </DropdownMenuItem>
                   )}
 
                   {canManageRoles && (
-                    <SidebarItem
-                      icon={Shield}
-                      label="Roles"
-                      to="/roles"
-                      isCollapsed={isSidebarCollapsed}
-                    />
+                    <DropdownMenuItem asChild>
+                      <Link
+                        to="/roles"
+                        className="flex items-center gap-2 cursor-pointer"
+                      >
+                        <Shield className="mr-2 h-4 w-4" />
+                        Rôles
+                      </Link>
+                    </DropdownMenuItem>
                   )}
-                </div>
-              )}
-            </div>
-          )}
 
-          {/* ...existing code... */}
-        </nav>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
 
-        <div className="p-4 border-t bg-muted/20 flex flex-col gap-2">
-          {/* Bouton Modifier mot de passe fixé en bas, juste au-dessus du bloc utilisateur/déconnexion */}
-          {!isSidebarCollapsed && (
-            <ChangePasswordModal
-              trigger={
-                <Button variant="outline" className="w-full justify-between font-medium border bg-muted/40 hover:bg-muted transition-all">
-                  <span className="flex items-center gap-2">
-                    <Settings className="h-4 w-4" />
-                    Modifier mot de passe
-                  </span>
-                </Button>
-              }
-            />
-          )}
-          {!isSidebarCollapsed ? (
-            <>
-              <div className="flex items-center justify-between mb-4 px-2">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-medium text-xs shrink-0">
-                    {user?.username?.substring(0, 2).toUpperCase()}
-                  </div>
-                  <div className="text-sm overflow-hidden min-w-0">
-                    <p className="font-medium truncate max-w-[100px]">{user?.username}</p>
-                    <p className="text-xs text-muted-foreground truncate max-w-[100px]">
-                      {user?.role}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1">
-                  <NotificationBell />
-                  <ModeToggle />
-                </div>
-              </div>
+          </nav>
 
-              <Button variant="destructive" className="w-full justify-start" onClick={logout}>
-                <LogOut className="mr-2 h-4 w-4" />
-                Déconnexion
-              </Button>
-            </>
-          ) : (
-            <div className="flex flex-col items-center gap-3">
-              <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-medium text-xs shrink-0">
-                {user?.username?.substring(0, 2).toUpperCase()}
-              </div>
-
-              <NotificationBell />
-              <ModeToggle />
-
-              <Button
-                variant="destructive"
-                size="icon"
-                className="h-10 w-10"
-                onClick={logout}
-                title="Déconnexion"
-              >
-                <LogOut className="h-4 w-4" />
-              </Button>
-            </div>
-          )}
         </div>
-      </aside>
 
-      <main className="flex-1 flex flex-col h-screen overflow-hidden">
-        <header className="h-16 border-b flex items-center justify-between px-6 bg-card md:hidden">
-          <h1 className="text-lg font-bold">CampaignMgr</h1>
-          <ModeToggle />
-        </header>
-        <div className="flex-1 p-6 overflow-auto bg-muted/10">{children}</div>
+      </header>
+      {/* Main content */}
+      <main className="flex-1 min-h-0 overflow-auto">
+        <div className="p-6 bg-muted/10">
+          {children}
+        </div>
       </main>
     </div>
   );

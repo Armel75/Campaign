@@ -1,6 +1,95 @@
 import prisma from '../infrastructure/prisma/client';
 import ExcelJS from 'exceljs';
-import { getSalesAmountByArticle, ArticleCodeRef } from './x3Sales.service';
+import {
+  getSalesAmountByArticle,
+  getMonthlySoldQuantitiesByArticle,
+  getSoldQuantitiesByArticle,
+  getCurrentStockByArticle,
+  ArticleCodeRef,
+} from './x3Sales.service';
+
+interface SalesMonthColumn {
+  label: string;      // "Ventes Mai" (en-tête export Excel)
+  monthLabel: string; // "Mai 2026" (affichage page détail)
+  key: string;        // 'YYYY-MM'
+}
+
+/**
+ * Calcule la fenêtre des 3 mois calendaires complets qui précèdent le mois de la
+ * date de référence (début de campagne) ainsi que les 3 colonnes mensuelles associées.
+ * Ex. référence = 01/08/2026 → fenêtre 01/05/2026 → 31/07/2026 (mai, juin, juillet).
+ */
+export function getPrecedingSalesMonths(refDate: Date): { columns: SalesMonthColumn[]; start: Date; end: Date } {
+  // Premier jour du mois (mois de référence - 3)
+  const start = new Date(refDate.getFullYear(), refDate.getMonth() - 3, 1);
+  // Dernier jour du mois précédant le mois de référence (jour 0 du mois de référence)
+  const end = new Date(refDate.getFullYear(), refDate.getMonth(), 0);
+
+  const columns: SalesMonthColumn[] = [3, 2, 1].map((offset) => {
+    const month = new Date(refDate.getFullYear(), refDate.getMonth() - offset, 1);
+    const monthName = month.toLocaleDateString('fr-FR', { month: 'long' });
+    const capitalized = monthName.charAt(0).toUpperCase() + monthName.slice(1);
+    return {
+      label: `Ventes ${capitalized}`,
+      monthLabel: `${capitalized} ${month.getFullYear()}`,
+      key: `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`,
+    };
+  });
+
+  return { columns, start, end };
+}
+
+export interface CampaignMonthlySales {
+  months: Array<{ key: string; monthLabel: string; quantity: number }>;
+  startDate: Date;
+  endDate: Date;
+}
+
+/**
+ * Quantités vendues agrégées par mois pour les 3 mois calendaires complets précédant le
+ * début de campagne (même fenêtre que l'export Excel). Source Sage X3.
+ * En cas d'indisponibilité de X3 → mois renvoyés à 0 (non bloquant, cohérent avec l'export).
+ */
+export async function getCampaignSalesLast3Months(campaignId: number): Promise<CampaignMonthlySales> {
+  const campaign = await prisma.campaign.findUnique({
+    where: { id: campaignId },
+    select: {
+      id: true,
+      startDate: true,
+      articles: { select: { id: true, codeSageX3: true, codeSage100: true } },
+    },
+  });
+
+  if (!campaign || !campaign.startDate) {
+    return { months: [], startDate: new Date(), endDate: new Date() };
+  }
+
+  const salesMonths = getPrecedingSalesMonths(campaign.startDate);
+
+  const articleRefs: ArticleCodeRef[] = campaign.articles
+    .filter(a => a.codeSage100 || a.codeSageX3)
+    .map(a => ({ articleId: a.id, codeSage100: a.codeSage100, codeSageX3: a.codeSageX3 }));
+
+  let monthlyByArticle: Record<number, Record<string, number>> = {};
+  if (articleRefs.length > 0) {
+    try {
+      monthlyByArticle = await getMonthlySoldQuantitiesByArticle(articleRefs, salesMonths.start, salesMonths.end);
+    } catch (error) {
+      console.error('Erreur ventes des 3 derniers mois:', error);
+    }
+  }
+
+  const months = salesMonths.columns.map(col => ({
+    key: col.key,
+    monthLabel: col.monthLabel,
+    quantity: campaign.articles.reduce(
+      (sum, a) => sum + (monthlyByArticle[a.id]?.[col.key] ?? 0),
+      0,
+    ),
+  }));
+
+  return { months, startDate: salesMonths.start, endDate: salesMonths.end };
+}
 
 /**
  * Génère un fichier Excel (.xlsx) contenant les informations et quantités d'une campagne marketing.
@@ -40,15 +129,53 @@ export async function exportCampaignToExcel(campaignId: number): Promise<{ buffe
     }
   }
 
+  // Ventes des 3 mois précédant le début de campagne (quantités par mois, source Sage X3)
+  const salesMonths = getPrecedingSalesMonths(campaign.startDate);
+  let monthlyQtyByArticle: Record<number, Record<string, number>> = {};
+  if (articleRefs.length > 0) {
+    try {
+      monthlyQtyByArticle = await getMonthlySoldQuantitiesByArticle(articleRefs, salesMonths.start, salesMonths.end);
+    } catch (error) {
+      console.error('Erreur quantités mensuelles de vente:', error);
+    }
+  }
+
+  // Lecture LIVE Sage X3 des ventes & stocks au moment de l'export (cohérence avec Montant).
+  // Si X3 est indisponible → repli silencieux sur les dernières valeurs synchronisées en base.
+  let liveStockByArticleId: Record<number, number> = {};
+  if (articleRefs.length > 0) {
+    try {
+      liveStockByArticleId = await getCurrentStockByArticle(articleRefs);
+    } catch (error) {
+      console.error('Erreur lecture live du stock (repli base):', error);
+    }
+  }
+
+  let liveSoldByArticleId: Record<number, number> = {};
+  if (articleRefs.length > 0 && campaign.startDate && campaign.endDate) {
+    try {
+      const effectiveEnd = campaign.endDate > new Date() ? new Date() : campaign.endDate;
+      liveSoldByArticleId = await getSoldQuantitiesByArticle(articleRefs, campaign.startDate, effectiveEnd);
+    } catch (error) {
+      console.error('Erreur lecture live des ventes (repli base):', error);
+    }
+  }
+
   const headers = [
-    'Désignation', 'Quantité prévue', 'Quantité à la création', 'Quantité au démarrage',
+    'Désignation',
+    ...salesMonths.columns.map(c => c.label),
+    'Quantité prévue', 'Quantité à la création', 'Quantité au démarrage',
     'Quantité courante', 'Quantité vendue', 'Quantité à la clôture',
     'Montant (FCFA) total perçu pendant la période',
   ];
 
   const data = campaign.articles.map(a => [
-    a.designation, a.plannedQuantity ?? 0, a.quantityAtCreation ?? 0, a.quantityAtStart ?? 0,
-    a.currentQuantity ?? 0, a.soldQuantity ?? 0, a.quantityAtClosure ?? 0,
+    a.designation,
+    ...salesMonths.columns.map(c => monthlyQtyByArticle[a.id]?.[c.key] ?? 0),
+    a.plannedQuantity ?? 0, a.quantityAtCreation ?? 0, a.quantityAtStart ?? 0,
+    liveStockByArticleId[a.id] ?? a.currentQuantity ?? 0,
+    liveSoldByArticleId[a.id] ?? a.soldQuantity ?? 0,
+    a.quantityAtClosure ?? 0,
     salesAmountByArticleId[a.id] ?? 0,
   ]);
 
@@ -126,24 +253,42 @@ export async function exportCampaignToExcel(campaignId: number): Promise<{ buffe
     statusCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: green } };
   }
 
-  // ─── LIGNE 7 : Séparateur ───
-  ws.getRow(7).height = 6;
+  // ─── LIGNE 7 : Bandeau « Trois derniers mois » ───
+  const salesBannerRow = 7;
+  const salesColStart = 2; // 1ère colonne des 3 mois (après Désignation)
+  const salesColEnd = salesColStart + salesMonths.columns.length - 1;
+  ws.mergeCells(salesBannerRow, salesColStart, salesBannerRow, salesColEnd);
+  const bannerCell = ws.getCell(salesBannerRow, salesColStart);
+  bannerCell.value = 'Trois derniers mois';
+  bannerCell.font = { bold: true, size: 11, color: { argb: white }, name: 'Calibri' };
+  bannerCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: green } };
+  bannerCell.alignment = { horizontal: 'center', vertical: 'middle' };
+  bannerCell.border = {
+    top: { style: 'thin', color: { argb: green } },
+    bottom: { style: 'thin', color: { argb: green } },
+    left: { style: 'thin', color: { argb: green } },
+    right: { style: 'thin', color: { argb: green } },
+  };
+  ws.getRow(salesBannerRow).height = 20;
 
   // ─── LIGNE 8 : En-têtes ───
   const headerRow = ws.getRow(headerRowNum);
   headerRow.height = 28;
   headers.forEach((h, i) => {
     const col = i + 1;
+    // Les 3 colonnes « Ventes … » sont mises en vert pour attirer l'attention
+    const isSalesMonth = i >= salesColStart - 1 && i < salesColStart - 1 + salesMonths.columns.length;
+    const headerColor = isSalesMonth ? green : blueDark;
     const cell = ws.getCell(headerRowNum, col);
     cell.value = h;
     cell.font = { bold: true, size: 11, color: { argb: white }, name: 'Calibri' };
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: blueDark } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: headerColor } };
     cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     cell.border = {
-      top: { style: 'thin', color: { argb: blueDark } },
-      bottom: { style: 'medium', color: { argb: blueDark } },
-      left: { style: 'thin', color: { argb: blueDark } },
-      right: { style: 'thin', color: { argb: blueDark } },
+      top: { style: 'thin', color: { argb: headerColor } },
+      bottom: { style: 'medium', color: { argb: headerColor } },
+      left: { style: 'thin', color: { argb: headerColor } },
+      right: { style: 'thin', color: { argb: headerColor } },
     };
   });
 
@@ -214,13 +359,16 @@ export async function exportCampaignToExcel(campaignId: number): Promise<{ buffe
 
   // ─── LARGEURS DE COLONNES ───
   ws.getColumn(1).width = 48;  // Désignation
-  ws.getColumn(2).width = 18;  // Qté prévue
-  ws.getColumn(3).width = 20;  // Qté création
-  ws.getColumn(4).width = 20;  // Qté démarrage
-  ws.getColumn(5).width = 18;  // Qté courante
-  ws.getColumn(6).width = 18;  // Qté vendue
-  ws.getColumn(7).width = 20;  // Qté clôture
-  ws.getColumn(8).width = 30;  // Montant (FCFA)
+  ws.getColumn(2).width = 16;  // Ventes M-3
+  ws.getColumn(3).width = 16;  // Ventes M-2
+  ws.getColumn(4).width = 16;  // Ventes M-1
+  ws.getColumn(5).width = 18;  // Qté prévue
+  ws.getColumn(6).width = 20;  // Qté création
+  ws.getColumn(7).width = 20;  // Qté démarrage
+  ws.getColumn(8).width = 18;  // Qté courante
+  ws.getColumn(9).width = 18;  // Qté vendue
+  ws.getColumn(10).width = 20; // Qté clôture
+  ws.getColumn(11).width = 30; // Montant (FCFA)
 
   // ─── AUTO-FILTRE ───
   if (nbData > 0) {
@@ -236,7 +384,7 @@ export async function exportCampaignToExcel(campaignId: number): Promise<{ buffe
   ];
 
   // Génération du buffer
-  const buffer = await wb.xlsx.writeBuffer() as Buffer;
+  const buffer = await wb.xlsx.writeBuffer() as unknown as Buffer;
   const safeName = campaign.name.replace(/[^a-zA-Z0-9-_]/g, '_');
   return { buffer, fileName: `${safeName}.xlsx` };
 }
@@ -275,17 +423,48 @@ export async function exportMultipleCampaignsToExcel(
       } catch { /* silence */ }
     }
 
+    // Ventes des 3 mois précédant le début de campagne (quantités par mois, source Sage X3)
+    const salesMonths = getPrecedingSalesMonths(c.startDate);
+    let monthlyQtyByArticle: Record<number, Record<string, number>> = {};
+    if (articleRefs.length > 0) {
+      try {
+        monthlyQtyByArticle = await getMonthlySoldQuantitiesByArticle(articleRefs, salesMonths.start, salesMonths.end);
+      } catch { /* silence */ }
+    }
+
+    // Lecture LIVE Sage X3 des ventes & stocks au moment de l'export (cohérence avec Montant).
+    // Si X3 est indisponible → repli silencieux sur les dernières valeurs synchronisées en base.
+    let liveSoldByArticleId: Record<number, number> = {};
+    let liveStockByArticleId: Record<number, number> = {};
+    if (articleRefs.length > 0) {
+      if (c.startDate && c.endDate) {
+        try {
+          const effectiveEnd = c.endDate > new Date() ? new Date() : c.endDate;
+          liveSoldByArticleId = await getSoldQuantitiesByArticle(articleRefs, c.startDate, effectiveEnd);
+        } catch { /* silence */ }
+      }
+      try {
+        liveStockByArticleId = await getCurrentStockByArticle(articleRefs);
+      } catch { /* silence */ }
+    }
+
     const sheetName = c.name.replace(/[^a-zA-Z0-9-_ àâäéèêëîïôöùûü]/g, '_').substring(0, 31);
     const ws = wb.addWorksheet(sheetName || 'Campagne');
 
     const headers = [
-      'Désignation', 'Quantité prévue', 'Quantité à la création', 'Quantité au démarrage',
+      'Désignation',
+      ...salesMonths.columns.map(c => c.label),
+      'Quantité prévue', 'Quantité à la création', 'Quantité au démarrage',
       'Quantité courante', 'Quantité vendue', 'Quantité à la clôture',
       'Montant (FCFA) total perçu pendant la période',
     ];
     const data = articles.map(a => [
-      a.designation, a.plannedQuantity ?? 0, a.quantityAtCreation ?? 0, a.quantityAtStart ?? 0,
-      a.currentQuantity ?? 0, a.soldQuantity ?? 0, a.quantityAtClosure ?? 0,
+      a.designation,
+      ...salesMonths.columns.map(c => monthlyQtyByArticle[a.id]?.[c.key] ?? 0),
+      a.plannedQuantity ?? 0, a.quantityAtCreation ?? 0, a.quantityAtStart ?? 0,
+      liveStockByArticleId[a.id] ?? a.currentQuantity ?? 0,
+      liveSoldByArticleId[a.id] ?? a.soldQuantity ?? 0,
+      a.quantityAtClosure ?? 0,
       salesAmounts[a.id] ?? 0,
     ]);
 
@@ -351,22 +530,41 @@ export async function exportMultipleCampaignsToExcel(
       sc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: green } };
     }
 
-    ws.getRow(7).height = 6;
+    // Ligne 7 : Bandeau « Trois derniers mois » (au-dessus des 3 colonnes ventes)
+    const salesBannerRow = 7;
+    const salesColStart = 2; // 1ère colonne des 3 mois (après Désignation)
+    const salesColEnd = salesColStart + salesMonths.columns.length - 1;
+    ws.mergeCells(salesBannerRow, salesColStart, salesBannerRow, salesColEnd);
+    const bannerCell = ws.getCell(salesBannerRow, salesColStart);
+    bannerCell.value = 'Trois derniers mois';
+    bannerCell.font = { bold: true, size: 11, color: { argb: white }, name: 'Calibri' };
+    bannerCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: green } };
+    bannerCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    bannerCell.border = {
+      top: { style: 'thin', color: { argb: green } },
+      bottom: { style: 'thin', color: { argb: green } },
+      left: { style: 'thin', color: { argb: green } },
+      right: { style: 'thin', color: { argb: green } },
+    };
+    ws.getRow(salesBannerRow).height = 20;
 
     // En-têtes
     const hr = ws.getRow(headerRowNum);
     hr.height = 28;
     headers.forEach((h, i) => {
+      // Les 3 colonnes « Ventes … » sont mises en vert pour attirer l'attention
+      const isSalesMonth = i >= salesColStart - 1 && i < salesColStart - 1 + salesMonths.columns.length;
+      const headerColor = isSalesMonth ? green : blueDark;
       const cell = ws.getCell(headerRowNum, i + 1);
       cell.value = h;
       cell.font = { bold: true, size: 11, color: { argb: white }, name: 'Calibri' };
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: blueDark } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: headerColor } };
       cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
       cell.border = {
-        top: { style: 'thin', color: { argb: blueDark } },
-        bottom: { style: 'medium', color: { argb: blueDark } },
-        left: { style: 'thin', color: { argb: blueDark } },
-        right: { style: 'thin', color: { argb: blueDark } },
+        top: { style: 'thin', color: { argb: headerColor } },
+        bottom: { style: 'medium', color: { argb: headerColor } },
+        left: { style: 'thin', color: { argb: headerColor } },
+        right: { style: 'thin', color: { argb: headerColor } },
       };
     });
 
@@ -428,13 +626,16 @@ export async function exportMultipleCampaignsToExcel(
 
     // Largeurs
     ws.getColumn(1).width = 48;
-    ws.getColumn(2).width = 18;
-    ws.getColumn(3).width = 20;
-    ws.getColumn(4).width = 20;
+    ws.getColumn(2).width = 16;
+    ws.getColumn(3).width = 16;
+    ws.getColumn(4).width = 16;
     ws.getColumn(5).width = 18;
-    ws.getColumn(6).width = 18;
+    ws.getColumn(6).width = 20;
     ws.getColumn(7).width = 20;
-    ws.getColumn(8).width = 30;
+    ws.getColumn(8).width = 18;
+    ws.getColumn(9).width = 18;
+    ws.getColumn(10).width = 20;
+    ws.getColumn(11).width = 30;
 
     if (nbData > 0) {
       ws.autoFilter = { from: { row: headerRowNum, column: 1 }, to: { row: headerRowNum, column: lastCol + 1 } };
@@ -442,5 +643,5 @@ export async function exportMultipleCampaignsToExcel(
     ws.views = [{ state: 'frozen', ySplit: headerRowNum, activeCell: `A${headerRowNum + 1}` }];
   }
 
-  return await wb.xlsx.writeBuffer() as Buffer;
+  return await wb.xlsx.writeBuffer() as unknown as Buffer;
 }

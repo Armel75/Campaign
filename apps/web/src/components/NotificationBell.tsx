@@ -15,7 +15,7 @@ interface Notification {
   createdAt: string;
 }
 
-export default function NotificationBell() {
+export default function NotificationBell({ labeled = false }: { labeled?: boolean }) {
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -121,26 +121,40 @@ export default function NotificationBell() {
     <div className="relative" ref={dropdownRef}>
       <Button
         type="button"
-        variant="ghost"
-        size="icon"
-        className="relative"
+        variant={labeled ? 'outline' : 'ghost'}
+        className={cn(
+          'relative',
+          labeled
+            ? 'w-full justify-between gap-2 px-3 font-medium border bg-muted/40 hover:bg-muted transition-all'
+            : 'h-10 w-10'
+        )}
         onClick={() => setIsOpen(!isOpen)}
         title="Notifications"
       >
-        {unreadCount > 0 ? (
-          <BellDot className="h-5 w-5 text-primary" />
-        ) : (
-          <Bell className="h-5 w-5" />
-        )}
+        <span className={cn('flex items-center gap-2 min-w-0', labeled && 'flex-1')}>
+          {unreadCount > 0 ? (
+            <BellDot className={cn('text-primary', labeled ? 'h-4 w-4' : 'h-5 w-5')} />
+          ) : (
+            <Bell className={labeled ? 'h-4 w-4' : 'h-5 w-5'} />
+          )}
+          {labeled && <span className="truncate">Notifications</span>}
+        </span>
         {unreadCount > 0 && (
-          <span className="absolute -top-1 -right-1 flex items-center justify-center h-5 w-5 rounded-full bg-red-500 text-[10px] font-bold text-white shadow-sm">
+          <span
+            className={cn(
+              'flex items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white',
+              labeled
+                ? 'h-5 min-w-5 shrink-0 px-1.5'
+                : 'absolute -top-1 -right-1 h-5 w-5 shadow-sm'
+            )}
+          >
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>
         )}
       </Button>
 
       {isOpen && (
-        <div className="absolute left-full bottom-full ml-2 mb-2 w-96 rounded-xl border bg-card shadow-xl z-50">
+<div className="absolute right-0 top-full mt-2 w-96 rounded-xl border bg-card shadow-xl z-50">        
           {/* En-tête */}
           <div className="flex items-center justify-between px-4 py-3 border-b">
             <h3 className="font-semibold text-sm">Notifications</h3>

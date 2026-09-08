@@ -1,5 +1,10 @@
 import prisma from '../infrastructure/prisma/client';
 import { getSalesAmountByArticle, ArticleCodeRef } from './x3Sales.service';
+import { mapLimit } from '../infrastructure/utils/async';
+import {
+  TtlCache,
+  DASHBOARD_CACHE_TTL_MS,
+} from '../infrastructure/cache/ttlCache';
 
 export type CampaignRoiStatus =
   | 'CALCULATED'
@@ -168,7 +173,21 @@ export async function getCampaignRoiSummary(
   };
 }
 
+const roiDashboardCache = new TtlCache(DASHBOARD_CACHE_TTL_MS);
+
 export async function getCampaignRoiDashboardSummary(options?: {
+  createdById?: number;
+}): Promise<CampaignRoiDashboardSummary> {
+  const cacheKey = `roi-dashboard:${options?.createdById ?? 'all'}`;
+  const cached = roiDashboardCache.get<CampaignRoiDashboardSummary>(cacheKey);
+  if (cached) return cached;
+
+  const summary = await computeCampaignRoiDashboardSummary(options);
+  roiDashboardCache.set(cacheKey, summary);
+  return summary;
+}
+
+async function computeCampaignRoiDashboardSummary(options?: {
   createdById?: number;
 }): Promise<CampaignRoiDashboardSummary> {
   const campaigns = await prisma.campaign.findMany({
@@ -179,30 +198,120 @@ export async function getCampaignRoiDashboardSummary(options?: {
       id: true,
       name: true,
       status: true,
+      budgetPlanId: true,
+      totalBudget: true,
+      startDate: true,
+      endDate: true,
+      budgetPlan: {
+        select: { currency: true },
+      },
+      articles: {
+        select: { id: true, codeSageX3: true, codeSage100: true },
+      },
     },
     orderBy: {
       updatedAt: 'desc',
     },
   });
 
-  // Traitement séquentiel pour éviter la saturation du pool X3 (max 10 connexions)
-  const campaignRoiItems: CampaignRoiDashboardItem[] = [];
-  for (const campaign of campaigns) {
-    const summary = await getCampaignRoiSummary(campaign.id);
+  // Ventes confirmées (SALE) par campagne — UNE seule requête groupBy
+  // (remplace 1 agrégat Prisma par campagne). Résultat identique.
+  const confirmedSalesRows = await prisma.conversion.groupBy({
+    by: ['campaignId'],
+    _sum: { amount: true },
+    _count: { id: true },
+    where: { status: 'CONFIRMED', type: 'SALE', amount: { not: null } },
+  });
+  const confirmedSalesByCampaign = new Map<
+    number,
+    { revenue: number; count: number }
+  >();
+  for (const row of confirmedSalesRows) {
+    if (row.campaignId === null) continue; // conversion sans campagne → non rattachable
+    confirmedSalesByCampaign.set(row.campaignId, {
+      revenue: decimalToNumber(row._sum.amount),
+      count: row._count.id ?? 0,
+    });
+  }
 
-    campaignRoiItems.push({
+  // ROI par campagne : calculs Prisma batchés + appels X3 PARALLÉLISÉS
+  // (pool X3 max 10 connexions → concurrence limitée à 5).
+  const campaignRoiItems = await mapLimit(campaigns, 5, async (campaign) => {
+    const totalCost =
+      campaign.totalBudget !== null ? decimalToNumber(campaign.totalBudget) : 0;
+
+    const confirmedSales = confirmedSalesByCampaign.get(campaign.id) ?? {
+      revenue: 0,
+      count: 0,
+    };
+    let totalRevenue = confirmedSales.revenue;
+    let confirmedSalesCount = confirmedSales.count;
+
+    // Ventes réelles Sage X3 (période propre à cette campagne — comportement conservé)
+    if (campaign.startDate && campaign.endDate) {
+      const articleRefs: ArticleCodeRef[] = campaign.articles
+        .filter((a) => a.codeSage100 || a.codeSageX3)
+        .map((a) => ({
+          articleId: a.id,
+          codeSage100: a.codeSage100,
+          codeSageX3: a.codeSageX3,
+        }));
+
+      if (articleRefs.length > 0) {
+        try {
+          const effectiveEndDate =
+            campaign.endDate > new Date() ? new Date() : campaign.endDate;
+          const salesAmounts = await getSalesAmountByArticle(
+            articleRefs,
+            campaign.startDate,
+            effectiveEndDate,
+          );
+
+          const x3Revenue = Object.values(salesAmounts).reduce((sum, val) => sum + val, 0);
+          const x3SalesCount = Object.values(salesAmounts).filter((val) => val > 0).length;
+
+          totalRevenue += x3Revenue;
+          confirmedSalesCount += x3SalesCount;
+        } catch (error) {
+          console.error(
+            'Erreur lors de la récupération des ventes Sage X3 pour le ROI:',
+            error,
+          );
+        }
+      }
+    }
+
+    const netProfit = totalRevenue - totalCost;
+
+    let roiPercent: number | null = null;
+    let roiStatus: CampaignRoiStatus = 'CALCULATED';
+
+    if (totalCost === 0) {
+      if (totalRevenue === 0) {
+        roiPercent = 0;
+        roiStatus = 'ZERO_COST_ZERO_REVENUE';
+      } else {
+        roiPercent = null;
+        roiStatus = 'NON_CALCULABLE_ZERO_COST';
+      }
+    } else {
+      roiPercent = ((totalRevenue - totalCost) / totalCost) * 100;
+      roiStatus = 'CALCULATED';
+    }
+
+    return {
       campaignId: campaign.id,
       name: campaign.name,
       status: campaign.status,
-      currency: summary.currency,
-      totalCost: summary.totalCost,
-      totalRevenue: summary.totalRevenue,
-      netProfit: summary.netProfit,
-      roiPercent: summary.roiPercent,
-      roiStatus: summary.roiStatus,
-      confirmedSalesCount: summary.confirmedSalesCount,
-    });
-  }
+      currency: campaign.budgetPlan?.currency || 'XAF',
+      totalCost: roundTo2(totalCost),
+      totalRevenue: roundTo2(totalRevenue),
+      netProfit: roundTo2(netProfit),
+      roiPercent: roiPercent === null ? null : roundTo2(roiPercent),
+      roiStatus,
+      confirmedSalesCount,
+    };
+  });
 
   const totalConfirmedRevenue = campaignRoiItems.reduce(
     (sum, item) => sum + item.totalRevenue,

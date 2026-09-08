@@ -321,6 +321,10 @@ export default function Dashboard() {
   const [loadingRoi, setLoadingRoi] = useState(false);
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [kpiTargetCampaignId, setKpiTargetCampaignId] = useState<string | number | null>(null);
+  const [monthlySalesByCampaign, setMonthlySalesByCampaign] = useState<
+    Record<string, Array<{ key: string; monthLabel: string; quantity: number }>>
+  >({});
+  const [monthlySalesLoading, setMonthlySalesLoading] = useState(false);
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -708,6 +712,50 @@ export default function Dashboard() {
       });
   }, [campaigns, roiDashboard]);
 
+  const activeCampaignIdsKey = useMemo(
+    () =>
+      activeCampaignCards
+        .map((c) => Number(c.id))
+        .filter((n) => Number.isInteger(n) && n > 0)
+        .sort((a, b) => a - b)
+        .join(','),
+    [activeCampaignCards],
+  );
+
+  // Ventes des 3 mois précédant le début de campagne pour les campagnes actives (batch)
+  useEffect(() => {
+    if (!activeCampaignIdsKey) {
+      setMonthlySalesByCampaign({});
+      setMonthlySalesLoading(false);
+      return;
+    }
+
+    const ids = activeCampaignIdsKey.split(',').map(Number);
+    let cancelled = false;
+    setMonthlySalesLoading(true);
+
+    api.post('/campaigns/sales-last-3-months', { campaignIds: ids })
+      .then((res) => {
+        if (cancelled) return;
+        const data = res.data?.data || {};
+        const mapped: Record<string, Array<{ key: string; monthLabel: string; quantity: number }>> = {};
+        for (const idStr of Object.keys(data)) {
+          mapped[idStr] = data[idStr]?.months ?? [];
+        }
+        setMonthlySalesByCampaign(mapped);
+      })
+      .catch(() => {
+        if (!cancelled) setMonthlySalesByCampaign({});
+      })
+      .finally(() => {
+        if (!cancelled) setMonthlySalesLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCampaignIdsKey]);
+
   const businessAlerts = useMemo(() => {
     const alerts: { id: string; label: string; level: 'high' | 'medium' | 'low' }[] = [];
 
@@ -975,10 +1023,55 @@ export default function Dashboard() {
                     </div>
                   )}
 
+                  {/* Ventes des 3 mois précédant la campagne */}
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between text-sm mb-1.5">
+                      <span className="text-muted-foreground">
+                        Ventes des 3 mois précédant la campagne
+                      </span>
+                      {monthlySalesLoading && (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                      )}
+                    </div>
+                    {(() => {
+                      const salesList = monthlySalesByCampaign[String(camp.id)] ?? [];
+                      if (salesList.length === 0) {
+                        return <p className="text-sm text-muted-foreground">—</p>;
+                      }
+                      const avg =
+                        salesList.reduce((sum, item) => sum + (item.quantity ?? 0), 0) / salesList.length;
+                      return (
+                        <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
+                          {salesList.map((item) => (
+                            <div key={item.key} className="text-center rounded-lg bg-muted/40 p-1.5 flex flex-col justify-center">
+                              <p className="text-[10px] sm:text-xs font-bold uppercase tracking-wide text-primary truncate" title={`Vente ${item.monthLabel}`}>
+                                VENTE {item.monthLabel}
+                              </p>
+                              <p className="text-sm sm:text-base font-bold mt-0.5">
+                                {item.quantity != null ? Number(item.quantity).toLocaleString('fr-FR') : '—'}
+                              </p>
+                            </div>
+                          ))}
+                          <div
+                            className="text-center rounded-lg bg-primary/10 border border-primary/20 p-1.5 flex flex-col justify-center"
+                            title="Moyenne des ventes des 3 mois précédant la campagne"
+                          >
+                            <p className="text-[10px] sm:text-xs font-bold uppercase tracking-wide text-primary truncate">
+                              MOYENNE 3M
+                            </p>
+                            <p className="text-sm sm:text-base font-bold mt-0.5 text-primary">
+                              {Number(avg).toLocaleString('fr-FR', { maximumFractionDigits: 1 })}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+
                   {/* Métriques */}
                   <div className="grid grid-cols-3 gap-2 mb-4">
                     <div className="rounded-xl border bg-background/50 px-3 py-2.5">
-                      <div className="text-xs text-muted-foreground">Vendu</div>
+                      <div className="text-xs text-muted-foreground">Vendu (actuelle)</div>
                       <div className="text-base font-bold">
                         {camp.totalSold > 0 ? camp.totalSold.toLocaleString('fr-FR') : '—'}{' '}
                         {camp.totalPlanned > 0 && (

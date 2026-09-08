@@ -458,27 +458,27 @@ export default function ProfitabilityDashboard() {
 
         <div className="flex items-center gap-2 print:hidden shrink-0">
           <Button
-            variant="outline"
             size="sm"
             onClick={handleExportExcel}
             disabled={exporting}
-            className="gap-2"
+            className="gap-2 bg-emerald-600 text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
+            title="Exporter le rapport en Excel (.xlsx)"
           >
             {exporting ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <FileDown className="h-4 w-4" />
             )}
-            Excel
+            Exporter Excel
           </Button>
           <Button
-            variant="outline"
             size="sm"
             onClick={handleExportPdf}
-            className="gap-2"
+            className="gap-2 bg-red-600 text-white shadow-sm hover:bg-red-700"
+            title="Exporter le rapport en PDF (impression)"
           >
             <Printer className="h-4 w-4" />
-            PDF
+            Exporter PDF
           </Button>
         </div>
       </div>

@@ -241,7 +241,7 @@ model CampaignMetric {
 
 model Lead {
   id             Int            @id @default(autoincrement())
-  campaignId     Int            @map("campaign_id")
+  campaignId     Int?           @map("campaign_id")
   createdById    Int            @map("created_by")
   assignedToId   Int?           @map("assigned_to")
 
@@ -259,7 +259,7 @@ model Lead {
   createdAt      DateTime       @default(now()) @map("created_at")
   updatedAt      DateTime       @updatedAt @map("updated_at")
 
-  campaign       Campaign       @relation(fields: [campaignId], references: [id])
+  campaign       Campaign?      @relation(fields: [campaignId], references: [id])
   createdBy      User           @relation("LeadCreatedBy", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
   assignedTo     GlpiUser?      @relation(fields: [assignedToId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
@@ -272,7 +272,7 @@ model Lead {
 
 model Conversion {
   id               Int       @id @default(autoincrement())
-  campaignId       Int       @map("campaign_id")
+  campaignId       Int?      @map("campaign_id")
   leadId           Int       @map("lead_id")
   createdById      Int       @map("created_by")
 
@@ -289,7 +289,7 @@ model Conversion {
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt @map("updated_at")
 
-  campaign         Campaign  @relation(fields: [campaignId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  campaign         Campaign? @relation(fields: [campaignId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   lead             Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   createdBy        User      @relation(fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
@@ -326,7 +326,7 @@ model Task {
 model LeadActivity {
   id            Int      @id @default(autoincrement())
   leadId        Int      @map("lead_id")
-  campaignId    Int      @map("campaign_id")
+  campaignId    Int?     @map("campaign_id")
   createdById   Int      @map("created_by")
 
   type          String   // CREATION, CHANGEMENT_STATUT, NOTE, APPEL, EMAIL, WHATSAPP, TACHE_CREEE, RELANCE, CONVERSION, PERDU, REASSIGNATION
@@ -340,9 +340,9 @@ model LeadActivity {
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
-  lead          Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  campaign      Campaign @relation(fields: [campaignId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  createdBy     User     @relation("LeadActivityCreatedBy", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  lead          Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  campaign      Campaign? @relation(fields: [campaignId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdBy     User      @relation("LeadActivityCreatedBy", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@map("lead_activities")
 }
