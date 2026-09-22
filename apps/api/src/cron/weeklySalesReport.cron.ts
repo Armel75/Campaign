@@ -24,7 +24,7 @@ function buildReportHtml(summary: Awaited<ReturnType<typeof generateWeeklySalesR
     .map((r) => `
       <tr>
         <td style="padding: 8px; border: 1px solid #e2e8f0; font-size: 13px;">
-          <a href="${appUrl}/campaigns/${r.id}" style="color: #1e40af; text-decoration: none; font-weight: 600;">${r.name}</a>
+          <a href="${appUrl}/campagne/campaigns/${r.id}" style="color: #1e40af; text-decoration: none; font-weight: 600;">${r.name}</a>
         </td>
         <td style="padding: 8px; border: 1px solid #e2e8f0; font-size: 13px;">${r.status}</td>
         <td style="padding: 8px; border: 1px solid #e2e8f0; font-size: 13px; text-align: right;">${r.plannedQuantity.toLocaleString('fr-FR')}</td>
