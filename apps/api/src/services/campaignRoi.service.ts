@@ -1,15 +1,30 @@
 import prisma from '../infrastructure/prisma/client';
-import { getSalesAmountByArticle, ArticleCodeRef } from './x3Sales.service';
-import { mapLimit } from '../infrastructure/utils/async';
 import {
   TtlCache,
   DASHBOARD_CACHE_TTL_MS,
 } from '../infrastructure/cache/ttlCache';
+import {
+  NON_CALCULABLE_ROI_STATUSES,
+  resolveRoi,
+  CampaignRoiStatus,
+} from './roiStatus';
 
-export type CampaignRoiStatus =
-  | 'CALCULATED'
-  | 'ZERO_COST_ZERO_REVENUE'
-  | 'NON_CALCULABLE_ZERO_COST';
+/**
+ * Règles métier uniques du ROI (validées) :
+ *
+ *  - **Coût** d'une campagne = son `totalBudget`. Un seul coût par campagne : les
+ *    dépenses (`Expense`) n'entrent dans aucun calcul de ROI.
+ *  - **Revenu** = uniquement les conversions `CONFIRMED` de type `SALE`, rattachables
+ *    à la campagne via `Conversion.campaignId`.
+ *
+ * Les ventes Sage X3 sont volontairement **exclues** du revenu : agrégées par
+ * article × date (tous clients, tous vendeurs), elles ne sont pas attribuables à une
+ * campagne et pouvaient être comptées deux fois avec les conversions. Elles restent
+ * utilisées ailleurs pour les quantités et prix unitaires par article.
+ */
+
+// Statut de ROI partagé avec le pilotage stratégique et les exports (source unique).
+export type { CampaignRoiStatus };
 
 export type CampaignRoiSummary = {
   campaignId: number;
@@ -33,6 +48,7 @@ export type CampaignRoiDashboardItem = {
   netProfit: number;
   roiPercent: number | null;
   roiStatus: CampaignRoiStatus;
+  /** Nombre de conversions CONFIRMED de type SALE (plus de comptage d'articles X3). */
   confirmedSalesCount: number;
 };
 
@@ -48,6 +64,13 @@ export type CampaignRoiDashboardSummary = {
   calculableCampaignCount: number;
   negativeRoiCampaignCount: number;
   nonCalculableRoiCampaignCount: number;
+  /**
+   * Liste complète (non tronquée) des campagnes avec leur ROI.
+   * Contrairement à `topCampaignsByRoi` / `negativeRoiCampaigns` /
+   * `nonCalculableRoiCampaigns` (limitées à 5 éléments), elle permet au tableau
+   * de bord de retrouver le coût/revenu de n'importe quelle campagne active.
+   */
+  campaigns: CampaignRoiDashboardItem[];
   topCampaignsByRoi: CampaignRoiDashboardItem[];
   negativeRoiCampaigns: CampaignRoiDashboardItem[];
   nonCalculableRoiCampaigns: CampaignRoiDashboardItem[];
@@ -80,13 +103,8 @@ export async function getCampaignRoiSummary(
       id: true,
       budgetPlanId: true,
       totalBudget: true,
-      startDate: true,
-      endDate: true,
       budgetPlan: {
         select: { currency: true },
-      },
-      articles: {
-        select: { id: true, codeSageX3: true, codeSage100: true },
       },
     },
   });
@@ -117,48 +135,14 @@ export async function getCampaignRoiSummary(
     },
   });
 
-  let totalRevenue = decimalToNumber(confirmedSalesAggregate._sum.amount);
-  let confirmedSalesCount = confirmedSalesAggregate._count.id ?? 0;
-
-  // Ajout des ventes réelles depuis Sage X3
-  if (campaign.startDate && campaign.endDate) {
-    const articleRefs: ArticleCodeRef[] = campaign.articles
-      .filter(a => a.codeSage100 || a.codeSageX3)
-      .map(a => ({ articleId: a.id, codeSage100: a.codeSage100, codeSageX3: a.codeSageX3 }));
-
-    if (articleRefs.length > 0) {
-      try {
-        const effectiveEndDate = campaign.endDate > new Date() ? new Date() : campaign.endDate;
-        const salesAmounts = await getSalesAmountByArticle(articleRefs, campaign.startDate, effectiveEndDate);
-
-        const x3Revenue = Object.values(salesAmounts).reduce((sum, val) => sum + val, 0);
-        const x3SalesCount = Object.values(salesAmounts).filter(val => val > 0).length;
-
-        totalRevenue += x3Revenue;
-        confirmedSalesCount += x3SalesCount;
-      } catch (error) {
-        console.error('Erreur lors de la récupération des ventes Sage X3 pour le ROI:', error);
-      }
-    }
-  }
+  // Revenu = conversions CONFIRMED de type SALE, seules rattachables à la campagne.
+  const totalRevenue = decimalToNumber(confirmedSalesAggregate._sum.amount);
+  const confirmedSalesCount = confirmedSalesAggregate._count.id ?? 0;
 
   const netProfit = totalRevenue - totalCost;
 
-  let roiPercent: number | null = null;
-  let roiStatus: CampaignRoiStatus = 'CALCULATED';
-
-  if (totalCost === 0) {
-    if (totalRevenue === 0) {
-      roiPercent = 0;
-      roiStatus = 'ZERO_COST_ZERO_REVENUE';
-    } else {
-      roiPercent = null;
-      roiStatus = 'NON_CALCULABLE_ZERO_COST';
-    }
-  } else {
-    roiPercent = ((totalRevenue - totalCost) / totalCost) * 100;
-    roiStatus = 'CALCULATED';
-  }
+  // Statut + pourcentage : calcul partagé (services/roiStatus.ts)
+  const { roiStatus, roiPercent } = resolveRoi(totalCost, totalRevenue);
 
   return {
     campaignId: campaign.id,
@@ -175,10 +159,25 @@ export async function getCampaignRoiSummary(
 
 const roiDashboardCache = new TtlCache(DASHBOARD_CACHE_TTL_MS);
 
-export async function getCampaignRoiDashboardSummary(options?: {
+/**
+ * Options du résumé ROI du tableau de bord.
+ *
+ * `from`/`to` (facultatifs) bornent le **revenu** (conversions confirmées dont la date
+ * de conversion tombe dans la période). Le **coût** reste le budget total de la
+ * campagne, non réparti dans le temps : sur une période courte, le ROI est donc
+ * structurellement sous-évalué, ce que l'interface signale explicitement.
+ */
+export type CampaignRoiDashboardOptions = {
   createdById?: number;
-}): Promise<CampaignRoiDashboardSummary> {
-  const cacheKey = `roi-dashboard:${options?.createdById ?? 'all'}`;
+  from?: Date;
+  to?: Date;
+};
+
+export async function getCampaignRoiDashboardSummary(
+  options?: CampaignRoiDashboardOptions
+): Promise<CampaignRoiDashboardSummary> {
+  const periodKey = `${options?.from?.toISOString() ?? ''}~${options?.to?.toISOString() ?? ''}`;
+  const cacheKey = `roi-dashboard:${options?.createdById ?? 'all'}:${periodKey}`;
   const cached = roiDashboardCache.get<CampaignRoiDashboardSummary>(cacheKey);
   if (cached) return cached;
 
@@ -187,9 +186,9 @@ export async function getCampaignRoiDashboardSummary(options?: {
   return summary;
 }
 
-async function computeCampaignRoiDashboardSummary(options?: {
-  createdById?: number;
-}): Promise<CampaignRoiDashboardSummary> {
+async function computeCampaignRoiDashboardSummary(
+  options?: CampaignRoiDashboardOptions
+): Promise<CampaignRoiDashboardSummary> {
   const campaigns = await prisma.campaign.findMany({
     where: {
       ...(options?.createdById ? { createdById: options.createdById } : {}),
@@ -200,13 +199,8 @@ async function computeCampaignRoiDashboardSummary(options?: {
       status: true,
       budgetPlanId: true,
       totalBudget: true,
-      startDate: true,
-      endDate: true,
       budgetPlan: {
         select: { currency: true },
-      },
-      articles: {
-        select: { id: true, codeSageX3: true, codeSage100: true },
       },
     },
     orderBy: {
@@ -220,7 +214,20 @@ async function computeCampaignRoiDashboardSummary(options?: {
     by: ['campaignId'],
     _sum: { amount: true },
     _count: { id: true },
-    where: { status: 'CONFIRMED', type: 'SALE', amount: { not: null } },
+    where: {
+      status: 'CONFIRMED',
+      type: 'SALE',
+      amount: { not: null },
+      // Période facultative : ne retenir que les conversions de la période
+      ...(options?.from || options?.to
+        ? {
+            conversionDate: {
+              ...(options?.from ? { gte: options.from } : {}),
+              ...(options?.to ? { lte: options.to } : {}),
+            },
+          }
+        : {}),
+    },
   });
   const confirmedSalesByCampaign = new Map<
     number,
@@ -234,9 +241,8 @@ async function computeCampaignRoiDashboardSummary(options?: {
     });
   }
 
-  // ROI par campagne : calculs Prisma batchés + appels X3 PARALLÉLISÉS
-  // (pool X3 max 10 connexions → concurrence limitée à 5).
-  const campaignRoiItems = await mapLimit(campaigns, 5, async (campaign) => {
+  // ROI par campagne : un seul groupBy Prisma en amont, aucun appel externe.
+  const campaignRoiItems = campaigns.map((campaign) => {
     const totalCost =
       campaign.totalBudget !== null ? decimalToNumber(campaign.totalBudget) : 0;
 
@@ -244,60 +250,13 @@ async function computeCampaignRoiDashboardSummary(options?: {
       revenue: 0,
       count: 0,
     };
-    let totalRevenue = confirmedSales.revenue;
-    let confirmedSalesCount = confirmedSales.count;
-
-    // Ventes réelles Sage X3 (période propre à cette campagne — comportement conservé)
-    if (campaign.startDate && campaign.endDate) {
-      const articleRefs: ArticleCodeRef[] = campaign.articles
-        .filter((a) => a.codeSage100 || a.codeSageX3)
-        .map((a) => ({
-          articleId: a.id,
-          codeSage100: a.codeSage100,
-          codeSageX3: a.codeSageX3,
-        }));
-
-      if (articleRefs.length > 0) {
-        try {
-          const effectiveEndDate =
-            campaign.endDate > new Date() ? new Date() : campaign.endDate;
-          const salesAmounts = await getSalesAmountByArticle(
-            articleRefs,
-            campaign.startDate,
-            effectiveEndDate,
-          );
-
-          const x3Revenue = Object.values(salesAmounts).reduce((sum, val) => sum + val, 0);
-          const x3SalesCount = Object.values(salesAmounts).filter((val) => val > 0).length;
-
-          totalRevenue += x3Revenue;
-          confirmedSalesCount += x3SalesCount;
-        } catch (error) {
-          console.error(
-            'Erreur lors de la récupération des ventes Sage X3 pour le ROI:',
-            error,
-          );
-        }
-      }
-    }
+    // Revenu = conversions CONFIRMED de type SALE (cf. en-tête du fichier).
+    const totalRevenue = confirmedSales.revenue;
+    const confirmedSalesCount = confirmedSales.count;
 
     const netProfit = totalRevenue - totalCost;
 
-    let roiPercent: number | null = null;
-    let roiStatus: CampaignRoiStatus = 'CALCULATED';
-
-    if (totalCost === 0) {
-      if (totalRevenue === 0) {
-        roiPercent = 0;
-        roiStatus = 'ZERO_COST_ZERO_REVENUE';
-      } else {
-        roiPercent = null;
-        roiStatus = 'NON_CALCULABLE_ZERO_COST';
-      }
-    } else {
-      roiPercent = ((totalRevenue - totalCost) / totalCost) * 100;
-      roiStatus = 'CALCULATED';
-    }
+    const { roiStatus, roiPercent } = resolveRoi(totalCost, totalRevenue);
 
     return {
       campaignId: campaign.id,
@@ -333,21 +292,10 @@ async function computeCampaignRoiDashboardSummary(options?: {
     0
   );
 
-  let globalRoiPercent: number | null = null;
-  let globalRoiStatus: CampaignRoiStatus = 'CALCULATED';
-
-  if (totalRealCost === 0) {
-    if (totalConfirmedRevenue === 0) {
-      globalRoiPercent = 0;
-      globalRoiStatus = 'ZERO_COST_ZERO_REVENUE';
-    } else {
-      globalRoiPercent = null;
-      globalRoiStatus = 'NON_CALCULABLE_ZERO_COST';
-    }
-  } else {
-    globalRoiPercent = ((totalConfirmedRevenue - totalRealCost) / totalRealCost) * 100;
-    globalRoiStatus = 'CALCULATED';
-  }
+  const { roiStatus: globalRoiStatus, roiPercent: globalRoiPercent } = resolveRoi(
+    totalRealCost,
+    totalConfirmedRevenue,
+  );
 
   const calculableCampaigns = campaignRoiItems.filter(
     (item) => item.roiPercent !== null
@@ -362,8 +310,9 @@ async function computeCampaignRoiDashboardSummary(options?: {
     .sort((a, b) => (a.roiPercent ?? 0) - (b.roiPercent ?? 0))
     .slice(0, 5);
 
+  // « Non calculable » regroupe les deux cas non affichables : coût nul et revenu non établi.
   const nonCalculableRoiCampaigns = campaignRoiItems
-    .filter((item) => item.roiStatus === 'NON_CALCULABLE_ZERO_COST')
+    .filter((item) => NON_CALCULABLE_ROI_STATUSES.includes(item.roiStatus))
     .slice(0, 5);
 
   return {
@@ -380,9 +329,12 @@ async function computeCampaignRoiDashboardSummary(options?: {
     negativeRoiCampaignCount: campaignRoiItems.filter(
       (item) => item.roiPercent !== null && item.roiPercent < 0
     ).length,
-    nonCalculableRoiCampaignCount: campaignRoiItems.filter(
-      (item) => item.roiStatus === 'NON_CALCULABLE_ZERO_COST'
+    nonCalculableRoiCampaignCount: campaignRoiItems.filter((item) =>
+      NON_CALCULABLE_ROI_STATUSES.includes(item.roiStatus)
     ).length,
+    // Liste complète : mêmes items que ceux utilisés pour construire les listes
+    // tronquées ci-dessus (aucun calcul supplémentaire, aucun coût additionnel).
+    campaigns: campaignRoiItems,
     topCampaignsByRoi,
     negativeRoiCampaigns,
     nonCalculableRoiCampaigns,

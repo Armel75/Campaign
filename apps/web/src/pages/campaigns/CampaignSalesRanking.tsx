@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Loader2, ShoppingCart, Trophy, BarChart3, TrendingUp, Eye } from 'lucide-react';
+import { Loader2, ShoppingCart, Trophy, BarChart3, TrendingUp, Eye, FileSpreadsheet } from 'lucide-react';
 
 interface CampaignArticle {
   id?: string;
@@ -65,9 +66,13 @@ function getStatusBadge(status?: string) {
 
 export default function CampaignSalesRanking() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  // L'export du classement est une action premium : bouton masqué sans la permission.
+  const canExportCampaign = user?.permissions?.canExportCampaign === true;
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   // Revenus par campagne (Sage X3)
   const [sales, setSales] = useState<Record<string, number | null>>({});
@@ -145,6 +150,36 @@ export default function CampaignSalesRanking() {
 
   const displayed = showAll ? ranking : ranking.slice(0, TOP_N);
 
+  // ── Export Excel du classement complet (généré côté API) ───────────────
+  const handleExportExcel = async () => {
+    try {
+      setExporting(true);
+      const response = await api.get('/campaigns/sales-ranking/export', {
+        responseType: 'blob',
+      });
+
+      const disposition = response.headers['content-disposition'];
+      let fileName = `classement-ventes-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      if (disposition) {
+        const match = disposition.match(/filename="?([^";]+)"?/);
+        if (match) fileName = match[1];
+      }
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', fileName);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode?.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Erreur export Excel du classement des ventes :', error);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const formatQty = (n: number) => (n > 0 ? n.toLocaleString('fr-FR') : '0');
   const formatDate = (d?: string) => (d ? new Date(d).toLocaleDateString('fr-FR') : '—');
 
@@ -194,7 +229,12 @@ export default function CampaignSalesRanking() {
 
         <Card className="rounded-2xl">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Revenu total</CardTitle>
+            <CardTitle
+              className="text-sm font-medium"
+              title="CA facturé Sage X3 des articles des campagnes sur leur fenêtre (tous clients, tous vendeurs) : corrélation de périmètre, PAS une attribution à la campagne."
+            >
+              CA facturé des articles (Sage X3)
+            </CardTitle>
             <TrendingUp className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -241,11 +281,29 @@ export default function CampaignSalesRanking() {
 
       {/* Classement */}
       <Card className="rounded-2xl">
-        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 gap-2">
           <CardTitle>Classement des ventes</CardTitle>
-          <Button variant="outline" size="sm" onClick={() => setShowAll((v) => !v)}>
-            {showAll ? `Voir Top ${TOP_N}` : 'Voir tout'}
-          </Button>
+          <div className="flex items-center gap-2">
+            {canExportCampaign && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleExportExcel}
+                disabled={exporting || loading}
+                title="Exporter le classement complet en Excel (.xlsx)"
+              >
+                {exporting ? (
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                ) : (
+                  <FileSpreadsheet className="h-4 w-4 mr-1" />
+                )}
+                {exporting ? 'Export…' : 'Exporter Excel'}
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={() => setShowAll((v) => !v)}>
+              {showAll ? `Voir Top ${TOP_N}` : 'Voir tout'}
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-3">
           {displayed.length === 0 ? (

@@ -4,6 +4,9 @@ import * as XLSX from 'xlsx';
 import prisma from '../../../infrastructure/prisma/client';
 import { requireAuth, AuthRequest } from '../middlewares/auth';
 import { requirePermission } from '../middlewares/permissions';
+import { parseDateRange, toPrismaDateFilter } from '../../../infrastructure/utils/dateRange';
+import { parseIncludeList } from '../../../infrastructure/utils/queryParams';
+import { buildMonthlyBuckets, parseTzOffsetMinutes } from '../../../infrastructure/utils/monthlyBuckets';
 import {
   parseSheet,
   detectColumnMap,
@@ -137,8 +140,19 @@ router.get(
         String(req.query.withoutCampaign) === '1' ||
         String(req.query.withoutCampaign) === 'true';
 
+      // Bornes de période (facultatives) appliquées à la date de création du lead
+      const createdRange = parseDateRange(req.query as Record<string, unknown>);
+      if (createdRange.error) {
+        return res.status(400).json({ message: createdRange.error });
+      }
+      const createdAtFilter = toPrismaDateFilter(createdRange);
+
+      // Agrégations facultatives (`?include=monthly`)
+      const includeList = parseIncludeList(req.query.include);
+
       const hasServerQuery =
-        !!search || !!status || !!pageRaw || !!limitRaw || withoutCampaign;
+        !!search || !!status || !!pageRaw || !!limitRaw || withoutCampaign || !!createdAtFilter ||
+        includeList.length > 0;
 
       if (status && !allowedLeadStatuses.includes(status)) {
         return res.status(400).json({
@@ -166,6 +180,10 @@ router.get(
 
       if (withoutCampaign) {
         filters.push({ campaignId: null });
+      }
+
+      if (createdAtFilter) {
+        filters.push({ createdAt: createdAtFilter });
       }
 
       if (search) {
@@ -322,12 +340,26 @@ router.get(
         }),
       ]);
 
+      // Tendance mensuelle exacte : une seule colonne lue, aucun plafond de lignes
+      const monthly = includeList.includes('monthly')
+        ? buildMonthlyBuckets(
+            (
+              await prisma.lead.findMany({
+                where: whereClause,
+                select: { createdAt: true },
+              })
+            ).map((row) => row.createdAt),
+            parseTzOffsetMinutes(req.query.tzOffset),
+          )
+        : undefined;
+
       return res.json({
         data: leads,
         total,
         page,
         limit,
         totalPages: Math.max(1, Math.ceil(total / limit)),
+        ...(monthly ? { monthly } : {}),
       });
     } catch (error) {
       next(error);

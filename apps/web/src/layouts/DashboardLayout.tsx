@@ -111,8 +111,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const canManageRoles = !!permissions?.canManageRoles;
   const canDeleteAllCampaigns = !!permissions?.canDeleteAllCampaigns;
 
+  // `canDeleteAllCampaigns` est volontairement inclus : le menu « Objectif » (qui n'était
+  // visible qu'avec cette permission) est désormais rangé dans « Paramètres ». Sans cela, un
+  // profil n'ayant que cette permission ne verrait plus le menu du tout.
   const showSettingsBlock =
-    canViewSettings || canManageUsers || canManageRoles;
+    canViewSettings || canManageUsers || canManageRoles || canDeleteAllCampaigns;
 
   return (
     <div className="flex flex-col h-screen bg-background">
@@ -207,7 +210,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             {canViewStrategicDashboard && (
               <NavItem
                 icon={TrendingUp}
-                label="Pilotage stratégique DG"
+                label="Pilotage stratégique"
                 to="/strategic"
                 highlighted
               />
@@ -231,7 +234,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
                 <NavItem
                   icon={Megaphone}
-                  label="Campagne"
+                  label="Campagne en cours"
                   to="/campaigns"
                 />
 
@@ -247,14 +250,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   to="/campaign-sales"
                 />
               </>
-            )}
-
-            {canDeleteAllCampaigns && (
-              <NavItem
-                icon={Target}
-                label="Objectif"
-                to="/objectives"
-              />
             )}
 
             {canViewTasks && (
@@ -340,6 +335,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                         </Link>
                       </DropdownMenuItem>
                     </>
+                  )}
+
+                  {canDeleteAllCampaigns && (
+                    <DropdownMenuItem asChild>
+                      <Link
+                        to="/objectives"
+                        className="flex items-center gap-2 cursor-pointer"
+                      >
+                        <Target className="mr-2 h-4 w-4" />
+                        Objectif
+                      </Link>
+                    </DropdownMenuItem>
                   )}
 
                   {canManageUsers && (

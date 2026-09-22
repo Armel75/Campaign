@@ -440,9 +440,21 @@ export async function getUnitPriceByArticle(
 }
 
 /**
- * Nombre de clients distincts ayant acheté les articles de la campagne.
- * COUNT(DISTINCT CLIENT) sur VENTE_VENDEUR_CLIENT,
- * sans double-compte si un même client achète plusieurs articles.
+ * Nombre de clients distincts ayant acheté les articles fournis, sur la période.
+ *
+ * Clé de comptage : `[NumClient]` (code compte client), avec repli sur `[CLIENT]` (nom)
+ * lorsque le code est absent. Compter sur le seul `[CLIENT]` SOUS-ÉVALUE : deux comptes
+ * distincts peuvent porter le même nom — mesuré le 2026-09 sur la vue brute :
+ * 1 644 noms distincts pour 1 669 comptes distincts.
+ *
+ * Dédoublonnage garanti sur l'ENSEMBLE des lots : un client qui achète plusieurs articles
+ * de la campagne (ou qui apparaît dans deux lots) n'est compté qu'une fois.
+ *
+ * Prédicats de date volontairement SARGABLES : comparaison sur la colonne brute
+ * `[DATE_FACTURE]`, jamais `CAST([DATE_FACTURE] AS DATE)` qui interdit l'index et impose
+ * un balayage complet de la vue. Mesuré : ~4 s pour un mois entier (56 762 lignes) contre
+ * un balayage complet non borné qui dépasse 15 s. Les bornes restent identiques à celles
+ * du CA (début inclus, fin incluse au jour près).
  */
 export async function getDistinctClientCountByArticle(
   articleRefs: ArticleCodeRef[],
@@ -478,7 +490,11 @@ export async function getDistinctClientCountByArticle(
           ${valuesClause}
         ) AS v(articleId, codeSage100, codeSageX3)
       )
-      SELECT DISTINCT src.[CLIENT] AS clientCode
+      SELECT DISTINCT
+        LTRIM(RTRIM(COALESCE(
+          NULLIF(CAST(src.[NumClient] AS VARCHAR(200)), ''),
+          CAST(src.[CLIENT] AS VARCHAR(200))
+        ))) AS clientCode
       FROM article_refs ar
       INNER JOIN dbo.VENTE_VENDEUR_CLIENT src
         ON (
@@ -488,15 +504,19 @@ export async function getDistinctClientCountByArticle(
           (ar.codeSageX3 IS NOT NULL
             AND UPPER(LTRIM(RTRIM(CAST(ISNULL(src.[REFERENCE], '') AS VARCHAR(1000))))) = ar.codeSageX3)
         )
-        AND CAST(src.[DATE_FACTURE] AS DATE) >= CAST(@startDate AS DATE)
-        AND CAST(src.[DATE_FACTURE] AS DATE) <= CAST(@endDate AS DATE)
+        AND src.[DATE_FACTURE] >= CAST(@startDate AS DATE)
+        AND src.[DATE_FACTURE] < DATEADD(DAY, 1, CAST(@endDate AS DATE))
       WHERE src.[CLIENT] IS NOT NULL
+         OR src.[NumClient] IS NOT NULL
     `;
 
     const response = await request.query(query);
 
     for (const row of response.recordset) {
-      allClients.add(String(row.clientCode).trim());
+      const clientCode = String(row.clientCode ?? '').trim();
+      if (clientCode) {
+        allClients.add(clientCode);
+      }
     }
   }
 

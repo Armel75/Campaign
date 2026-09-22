@@ -321,6 +321,17 @@ const AppRoutes = () => {
                 ]}
                 createPath="/tasks/new"
                 onEdit={(id) => navigate(`/tasks/${id}/edit`)}
+                canCreate={!!permissions?.canManageTasks}
+                canEditRow={(row: any) =>
+                  !!permissions?.canManageTasks &&
+                  (!!permissions?.canEditAllCampaigns ||
+                    String(row.createdById) === String(user?.id))
+                }
+                canDeleteRow={(row: any) =>
+                  !!permissions?.canManageTasks &&
+                  (!!permissions?.canDeleteAllCampaigns ||
+                    String(row.createdById) === String(user?.id))
+                }
                 pagination
                 pageSize={10}
                 paginationMode="server"

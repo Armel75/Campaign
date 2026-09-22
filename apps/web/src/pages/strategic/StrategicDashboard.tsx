@@ -34,6 +34,13 @@ import {
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
+/** Statuts partagés avec l'API (services/roiStatus.ts). */
+type CampaignRoiStatus =
+  | 'CALCULATED'
+  | 'ZERO_COST_ZERO_REVENUE'
+  | 'NON_CALCULABLE_ZERO_COST'
+  | 'NO_ESTABLISHED_REVENUE';
+
 type ProfitabilityByObjective = {
   objectiveId: number;
   objectiveCode: string;
@@ -44,6 +51,7 @@ type ProfitabilityByObjective = {
   totalCost: number;
   totalProfit: number;
   roiPercent: number | null;
+  roiStatus: CampaignRoiStatus;
 };
 
 type AcquisitionCosts = {
@@ -78,6 +86,7 @@ type StrategicOverview = {
   totalRevenue: number;
   totalProfit: number;
   globalRoiPercent: number | null;
+  globalRoiStatus: CampaignRoiStatus;
 };
 
 type StrategicDashboardSummary = {
@@ -320,7 +329,7 @@ export default function StrategicDashboard() {
           <p><strong>CPA</strong> = Coût Par Acquisition (Budget total / Nombre de leads)</p>
           <p><strong>ROAS</strong> = Return On Ad Spend (Revenu confirmé / Budget total)</p>
           <p><strong>ROI</strong> = (Revenu − Coût) / Coût × 100</p>
-          <p className="pt-1">Les revenus incluent les conversions confirmées (type SALE). Les coûts incluent le budget des campagnes et les dépenses réelles.</p>
+          <p className="pt-1">Les revenus correspondent aux conversions confirmées (type SALE). Les coûts correspondent au budget total des campagnes : un seul coût par campagne, jamais les dépenses.</p>
         </CardContent>
       </Card>
 
@@ -333,13 +342,27 @@ export default function StrategicDashboard() {
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold ${
-              overview && overview.globalRoiPercent !== null && overview.globalRoiPercent >= 0
+              overview &&
+              overview.globalRoiStatus !== 'NO_ESTABLISHED_REVENUE' &&
+              overview.globalRoiPercent !== null &&
+              overview.globalRoiPercent >= 0
                 ? 'text-green-600'
-                : overview && overview.globalRoiPercent !== null && overview.globalRoiPercent < 0
+                : overview &&
+                    overview.globalRoiStatus !== 'NO_ESTABLISHED_REVENUE' &&
+                    overview.globalRoiPercent !== null &&
+                    overview.globalRoiPercent < 0
                   ? 'text-red-500'
                   : ''
             }`}>
-              {overview ? formatRoiDisplay(overview.globalRoiPercent) : '—'}
+              {overview && overview.globalRoiStatus === 'NO_ESTABLISHED_REVENUE' ? (
+                <span title="Aucune vente confirmée sur le périmètre : le ROI n'est pas calculable (le budget cumulé n'est pas une perte)">
+                  —
+                </span>
+              ) : overview ? (
+                formatRoiDisplay(overview.globalRoiPercent)
+              ) : (
+                '—'
+              )}
             </div>
             <p className="text-xs text-muted-foreground mt-1">
               Revenu {formatCurrency(overview?.totalRevenue ?? 0)} · Coût {formatCurrency(overview?.totalExpenses ?? 0)}
@@ -354,9 +377,21 @@ export default function StrategicDashboard() {
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold ${
-              overview && overview.totalProfit >= 0 ? 'text-green-600' : 'text-red-500'
+              !overview || overview.globalRoiStatus === 'NO_ESTABLISHED_REVENUE'
+                ? ''
+                : overview.totalProfit >= 0
+                  ? 'text-green-600'
+                  : 'text-red-500'
             }`}>
-              {overview ? formatCurrency(overview.totalProfit) : '—'}
+              {overview && overview.globalRoiStatus === 'NO_ESTABLISHED_REVENUE' ? (
+                <span title="Aucune vente confirmée sur le périmètre : le profit n'est pas établi (le coût correspond au budget total des campagnes)">
+                  —
+                </span>
+              ) : overview ? (
+                formatCurrency(overview.totalProfit)
+              ) : (
+                '—'
+              )}
             </div>
             <p className="text-xs text-muted-foreground mt-1">
               Budget total : {formatCurrency(overview?.totalBudget ?? 0)}
@@ -395,7 +430,7 @@ export default function StrategicDashboard() {
                 : '—'}
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              Revenu / Budget dépensé
+              Revenu / Budget total
             </p>
           </CardContent>
         </Card>
@@ -484,6 +519,8 @@ export default function StrategicDashboard() {
                   {data?.profitabilityByObjective.map((obj) => {
                     const roiPositive = obj.roiPercent !== null && obj.roiPercent >= 0;
                     const profitPositive = obj.totalProfit >= 0;
+                    // Aucune vente confirmée ⇒ ni ROI ni profit affichables (évite un faux −100 %)
+                    const revenueNotEstablished = obj.roiStatus === 'NO_ESTABLISHED_REVENUE';
                     return (
                       <tr key={obj.objectiveId} className="border-b last:border-0 hover:bg-muted/50">
                         <td className="py-3 px-2 font-medium">
@@ -503,11 +540,15 @@ export default function StrategicDashboard() {
                         <td className="text-right py-3 px-2">{formatCurrency(obj.totalBudget)}</td>
                         <td className="text-right py-3 px-2">{formatCurrency(obj.totalRevenueFromConversions)}</td>
                         <td className="text-right py-3 px-2">{formatCurrency(obj.totalCost)}</td>
-                        <td className={`text-right py-3 px-2 font-medium ${profitPositive ? 'text-green-600' : 'text-red-500'}`}>
-                          {formatCurrency(obj.totalProfit)}
+                        <td className={`text-right py-3 px-2 font-medium ${
+                          revenueNotEstablished ? '' : profitPositive ? 'text-green-600' : 'text-red-500'
+                        }`}>
+                          {revenueNotEstablished ? '—' : formatCurrency(obj.totalProfit)}
                         </td>
-                        <td className={`text-right py-3 px-2 font-bold ${roiPositive ? 'text-green-600' : 'text-red-500'}`}>
-                          {formatRoiDisplay(obj.roiPercent)}
+                        <td className={`text-right py-3 px-2 font-bold ${
+                          revenueNotEstablished ? '' : roiPositive ? 'text-green-600' : 'text-red-500'
+                        }`}>
+                          {revenueNotEstablished ? '—' : formatRoiDisplay(obj.roiPercent)}
                         </td>
                       </tr>
                     );
@@ -673,7 +714,7 @@ export default function StrategicDashboard() {
           <p><strong>CPA</strong> = Coût Par Acquisition (Budget total / Nombre de leads)</p>
           <p><strong>ROAS</strong> = Return On Ad Spend (Revenu confirmé / Budget total)</p>
           <p><strong>ROI</strong> = (Revenu − Coût) / Coût × 100</p>
-          <p className="pt-1">Les revenus incluent les conversions confirmées (type SALE). Les coûts incluent le budget des campagnes et les dépenses réelles.</p>
+          <p className="pt-1">Les revenus correspondent aux conversions confirmées (type SALE). Les coûts correspondent au budget total des campagnes : un seul coût par campagne, jamais les dépenses.</p>
         </CardContent>
       </Card>
     </div>

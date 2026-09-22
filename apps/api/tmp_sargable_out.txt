@@ -1,0 +1,30 @@
+Campagne 90 « CAMPAGNE DE DISPONIBILITE PRODUITS EN AGENCE »
+Début = 2026-09-16
+Fenêtre = 2026-05-31 → 2026-08-30
+Articles mesurables = 148
+Mois attendus = 2026-06, 2026-07, 2026-08
+(node:20944) [DEP0123] DeprecationWarning: Setting the TLS ServerName to an IP address is not permitted by RFC 6066. This will be ignored in a future version.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+FATAL RequestError: Timeout: Request failed to complete in 60000ms
+    at c:\Users\deffo_a\ALL_PROJECTS_SOREPCO\Campaign\node_modules\mssql\lib\tedious\request.js:449:19
+    at Array.forEach (<anonymous>)
+    at Request.userCallback (c:\Users\deffo_a\ALL_PROJECTS_SOREPCO\Campaign\node_modules\mssql\lib\tedious\request.js:446:46)
+    at Request.callback (c:\Users\deffo_a\ALL_PROJECTS_SOREPCO\Campaign\node_modules\tedious\lib\request.js:239:14)
+    at c:\Users\deffo_a\ALL_PROJECTS_SOREPCO\Campaign\node_modules\tedious\lib\connection.js:2706:24
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5) {
+  code: 'ETIMEOUT',
+  originalError: RequestError: Timeout: Request failed to complete in 60000ms
+      at Connection.requestTimeout (c:\Users\deffo_a\ALL_PROJECTS_SOREPCO\Campaign\node_modules\tedious\lib\connection.js:1316:21)
+      at Timeout._onTimeout (c:\Users\deffo_a\ALL_PROJECTS_SOREPCO\Campaign\node_modules\tedious\lib\connection.js:1293:14)
+      at listOnTimeout (node:internal/timers:635:17)
+      at process.processTimers (node:internal/timers:571:7) {
+    code: 'ETIMEOUT'
+  },
+  number: 'ETIMEOUT',
+  lineNumber: undefined,
+  state: undefined,
+  class: undefined,
+  serverName: undefined,
+  procName: undefined,
+  precedingErrors: []
+}

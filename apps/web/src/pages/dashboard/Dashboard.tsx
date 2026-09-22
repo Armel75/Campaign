@@ -2,13 +2,11 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/lib/auth';
 import api from '@/lib/api';
 import {
   ResponsiveContainer,
-  BarChart,
-  Bar,
   XAxis,
   YAxis,
   Tooltip,
@@ -35,11 +33,22 @@ import {
   Package,
   Eye,
   FileSpreadsheet,
-  Filter,
+  Info,
   Loader2,
   Plus,
 } from 'lucide-react';
 import KpiTargetModal from '@/components/KpiTargetModal';
+import X3MeasureButton from '@/components/X3MeasureButton';
+import { useMeasureJobs } from '@/lib/useMeasureJobs';
+import PeriodFilter from '@/components/PeriodFilter';
+import {
+  CalendarPeriod,
+  PeriodPreset,
+  ResolvedPeriod,
+  buildPeriodSearchParams,
+  readPeriodFromUrl,
+  resolvePeriod,
+} from '@/lib/period';
 
 type CampaignArticle = {
   id: string | number;
@@ -76,13 +85,17 @@ type Campaign = {
   };
 };
 
-type Lead = {
-  id: string | number;
-  name?: string;
-  email?: string;
-  status?: string;
-  createdAt?: string;
+/** Point de tendance mensuelle renvoyé par l'API (`?include=monthly`). */
+type MonthlySeriesPoint = {
+  key: string;
+  year: number;
+  /** 1 = janvier … 12 = décembre. */
+  month: number;
+  count: number;
 };
+
+/** Répartition par statut renvoyée par l'API (`?include=statuses`). */
+type ConversionStatusSummary = Record<string, { count: number; amount: number }>;
 
 type Task = {
   id: string | number;
@@ -103,14 +116,6 @@ type Task = {
   };
 };
 
-type Conversion = {
-  id: string | number;
-  createdAt?: string;
-  amount?: number | string;
-  status?: string;
-  type?: string;
-};
-
 type DashboardStats = {
   activeCampaigns: number;
   totalCampaigns: number;
@@ -122,15 +127,14 @@ type DashboardStats = {
   completedCampaigns: number;
   totalConversions: number;
   conversionRate: number;
-  totalExpenses: number;
   totalBudget: number | null;
-  remainingBudget: number | null;
 };
 
 type CampaignRoiStatus =
   | 'CALCULATED'
   | 'ZERO_COST_ZERO_REVENUE'
-  | 'NON_CALCULABLE_ZERO_COST';
+  | 'NON_CALCULABLE_ZERO_COST'
+  | 'NO_ESTABLISHED_REVENUE';
 
 type RoiDashboardCampaignItem = {
   campaignId: number;
@@ -157,10 +161,51 @@ type RoiDashboardSummary = {
   calculableCampaignCount: number;
   negativeRoiCampaignCount: number;
   nonCalculableRoiCampaignCount: number;
+  /**
+   * Liste complète des campagnes avec leur ROI (non tronquée).
+   * Source principale pour retrouver le coût/revenu des cartes du tableau de bord.
+   */
+  campaigns?: RoiDashboardCampaignItem[];
   topCampaignsByRoi: RoiDashboardCampaignItem[];
   negativeRoiCampaigns: RoiDashboardCampaignItem[];
   nonCalculableRoiCampaigns: RoiDashboardCampaignItem[];
 };
+
+/**
+ * CA facturé Sage X3 des articles d'une campagne + clients distincts
+ * (résultat de la mesure `GET /campaigns/:id/x3-revenue/measure`).
+ * `caArticles = null` signifie « non mesuré » (X3 indisponible ou aucun article codifié) —
+ * et jamais 0, qui ferait croire à une absence de ventes.
+ */
+type X3CampaignRevenue = {
+  caArticles: number | null;
+  /**
+   * Clients distincts ayant acheté au moins un article de la campagne (Sage X3).
+   * `null` = non mesuré (X3 en échec) — jamais 0.
+   */
+  distinctClients: number | null;
+  articlesCount: number;
+  articlesMesurables: number;
+  articlesNonMesures: number;
+  codeDoublons: number;
+  computedAt?: string;
+};
+
+/** Point mensuel des ventes précédant la campagne (réponse de l'API). */
+type MonthlySalesPoint = { key: string; monthLabel: string; quantity: number };
+
+/** Réponse de la mesure « ventes des 3 mois précédant la campagne ». */
+type Last3MonthsPayload = {
+  months: MonthlySalesPoint[];
+  startDate?: string;
+  endDate?: string;
+};
+
+/** Libellé du périmètre mesuré (« 4/12 article(s) »), `null` si rien n'est mesuré. */
+function formatX3Perimeter(revenue: X3CampaignRevenue | undefined): string | null {
+  if (!revenue) return null;
+  return `${revenue.articlesMesurables}/${revenue.articlesCount} article(s)`;
+}
 
 function safeArray<T = any>(value: any): T[] {
   return Array.isArray(value) ? value : [];
@@ -205,6 +250,37 @@ function isSilentHttpError(error: any) {
   return error?.response?.status === 403;
 }
 
+/** Requête annulée par un changement de filtre (AbortController) : à ignorer silencieusement. */
+function isCanceledRequest(error: any) {
+  return error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError';
+}
+
+/** Un échec ne doit être journalisé que s'il est réellement inattendu. */
+function shouldReportError(reason: unknown) {
+  return !isSilentHttpError(reason) && !isCanceledRequest(reason);
+}
+
+/**
+ * Statuts réellement stockés en base (cf. `task.routes.ts`).
+ * Les libellés français ne servent qu'à l'affichage : comparer `status` aux libellés
+ * faisait rendre « Inconnu » à toutes les tâches. L'exclusion des tâches terminées /
+ * annulées du KPI « en retard » est désormais faite par l'API (`excludeStatus`).
+ */
+const TASK_STATUS = {
+  TODO: 'A_FAIRE',
+  IN_PROGRESS: 'EN_COURS',
+  DONE: 'TERMINE',
+  CANCELLED: 'ANNULE',
+} as const;
+
+/**
+ * Total exact renvoyé par la pagination serveur.
+ * Les listes destinées à l'affichage sont bornées, jamais les compteurs.
+ */
+function readListTotal(total: unknown, fallback: number) {
+  return typeof total === 'number' && Number.isFinite(total) ? total : fallback;
+}
+
 function getCampaignStatusBadge(status?: string) {
   const s = normalizeStatus(status);
 
@@ -244,25 +320,29 @@ function getCampaignStatusBadge(status?: string) {
 }
 
 function getTaskStatusBadge(status?: string) {
-  const s = String(status || '').trim();
-
-  switch (s) {
-    case 'À faire':
+  switch (String(status || '').trim().toUpperCase()) {
+    case TASK_STATUS.TODO:
       return <Badge variant="secondary">À faire</Badge>;
-    case 'En cours':
+    case TASK_STATUS.IN_PROGRESS:
       return (
         <Badge className="border-blue-200 bg-blue-100 text-blue-800 hover:bg-blue-100">
           En cours
         </Badge>
       );
-    case 'Terminé':
+    case TASK_STATUS.DONE:
       return (
         <Badge className="border-green-200 bg-green-100 text-green-800 hover:bg-green-100">
           Terminé
         </Badge>
       );
+    case TASK_STATUS.CANCELLED:
+      return (
+        <Badge className="border-slate-200 bg-slate-100 text-slate-600 hover:bg-slate-100">
+          Annulé
+        </Badge>
+      );
     default:
-      return <Badge variant="outline">{status || 'Inconnu'}</Badge>;
+      return <Badge variant="outline">{status || '—'}</Badge>;
   }
 }
 
@@ -284,6 +364,12 @@ function getRoiStatusBadge(status?: CampaignRoiStatus) {
       return (
         <Badge className="border-amber-200 bg-amber-100 text-amber-800 hover:bg-amber-100">
           Non calculable
+        </Badge>
+      );
+    case 'NO_ESTABLISHED_REVENUE':
+      return (
+        <Badge className="border-amber-200 bg-amber-100 text-amber-800 hover:bg-amber-100">
+          Revenu non établi
         </Badge>
       );
     default:
@@ -308,7 +394,7 @@ function formatRoiDisplay(roiPercent: number | null) {
 
 const KPI_LABELS: Record<string, string> = {
   SOLD_QUANTITY: 'Qté vendue',
-  REVENUE: 'Revenu',
+  REVENUE: 'Objectif de revenu (KPI)',
   LEADS: 'Leads',
   CONVERSIONS: 'Conversions',
   CLIENTS: 'Clients',
@@ -321,19 +407,46 @@ export default function Dashboard() {
   const [loadingRoi, setLoadingRoi] = useState(false);
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [kpiTargetCampaignId, setKpiTargetCampaignId] = useState<string | number | null>(null);
-  const [monthlySalesByCampaign, setMonthlySalesByCampaign] = useState<
-    Record<string, Array<{ key: string; monthLabel: string; quantity: number }>>
-  >({});
-  const [monthlySalesLoading, setMonthlySalesLoading] = useState(false);
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [leads, setLeads] = useState<Lead[]>([]);
+  // Tâches les plus urgentes de la période (top 5, tri calculé par le serveur)
   const [tasks, setTasks] = useState<Task[]>([]);
-  // const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [conversions, setConversions] = useState<Conversion[]>([]);
+  // Séries et répartitions agrégées côté serveur (aucun plafond de lignes)
+  const [leadMonthly, setLeadMonthly] = useState<MonthlySeriesPoint[]>([]);
+  const [conversionMonthly, setConversionMonthly] = useState<MonthlySeriesPoint[]>([]);
+  const [conversionStatusSummary, setConversionStatusSummary] =
+    useState<ConversionStatusSummary>({});
   const [roiDashboard, setRoiDashboard] = useState<RoiDashboardSummary | null>(null);
-  type Period = '7j' | '30j' | '90j' | 'annee' | 'tout';
-  const [period, setPeriod] = useState<Period>('annee');
+  // Revenu non établi (aucune vente confirmée sur la période) : le profit n'est alors pas
+  // interprétable — on affiche « — » au lieu d'un faux profit négatif égal au budget.
+  const revenueNotEstablished =
+    roiDashboard?.globalRoiStatus === 'NO_ESTABLISHED_REVENUE';
+  // Filtre de période : l'URL est la source de vérité unique (vue partageable +
+  // navigation arrière/avant du navigateur). Fenêtres glissantes (preset) ou
+  // période calendaire (année / mois).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { preset: periodPreset, calendar: calendarPeriod } = useMemo(
+    () => readPeriodFromUrl(searchParams),
+    [searchParams],
+  );
+  const period: ResolvedPeriod = useMemo(
+    () => resolvePeriod(periodPreset, calendarPeriod),
+    [periodPreset, calendarPeriod],
+  );
+
+  const selectPreset = useCallback(
+    (preset: PeriodPreset) => setSearchParams(buildPeriodSearchParams(searchParams, preset, null)),
+    [searchParams, setSearchParams],
+  );
+  const selectCalendar = useCallback(
+    (calendar: CalendarPeriod) =>
+      setSearchParams(buildPeriodSearchParams(searchParams, periodPreset, calendar)),
+    [searchParams, setSearchParams, periodPreset],
+  );
+  const clearCalendar = useCallback(
+    () => setSearchParams(buildPeriodSearchParams(searchParams, periodPreset, null)),
+    [searchParams, setSearchParams, periodPreset],
+  );
   // const roi = roiDashboard ?? {
   //   totalConfirmedRevenue: 0,
   //   totalRealCost: 0,
@@ -357,12 +470,34 @@ export default function Dashboard() {
     completedCampaigns: 0,
     totalConversions: 0,
     conversionRate: 0,
-    totalExpenses: 0,
     totalBudget: null,
-    remainingBudget: null,
   });
 
   useEffect(() => {
+    // Anti-course : toute réponse d'une période précédente est abandonnée
+    // (annulation réseau réelle + garde logique).
+    const controller = new AbortController();
+    const { signal } = controller;
+    let cancelled = false;
+    const isStale = () => cancelled || signal.aborted;
+
+    const fromIso = period.from ? period.from.toISOString() : undefined;
+    const toIso = period.to ? period.to.toISOString() : undefined;
+    const periodParams = {
+      ...(fromIso ? { from: fromIso } : {}),
+      ...(toIso ? { to: toIso } : {}),
+    };
+    // Décalage horaire de l'utilisateur : les regroupements mensuels sont calculés
+    // par l'API dans SON fuseau, pas dans celui du serveur.
+    const tzOffset = String(-new Date().getTimezoneOffset());
+    const now = new Date();
+    // « En retard » : échéance déjà dépassée, bornée par la fin de période si elle est passée.
+    const overdueToIso = (period.to && period.to < now ? period.to : now).toISOString();
+    // Période entièrement future (ex. filtre « Décembre 2026 ») : aucune tâche ne peut être
+    // en retard. On répond 0 sans interroger l'API, car `dueFrom > dueTo` est une plage
+    // inversée que l'API refuse légitimement en 400.
+    const overdueRangeIsEmpty = !!period.from && period.from.getTime() > now.getTime();
+
     const fetchBaseData = async () => {
       try {
         setLoadingBase(true);
@@ -370,14 +505,66 @@ export default function Dashboard() {
         const [
           campaignsResult,
           leadsResult,
-          tasksResult,
           conversionsResult,
+          urgentTasksResult,
+          tasksCreatedResult,
+          overdueTasksResult,
         ] = await Promise.allSettled([
-          api.get('/campaigns', { params: { page: 1, limit: 100 } }),
-          api.get('/leads'),
-          api.get('/tasks'),
-          api.get('/expenses'),
-          api.get('/conversions'),
+          // Campagnes chevauchant la période + compteurs par statut et budget exacts
+          api.get('/campaigns', {
+            params: {
+              page: 1,
+              limit: 100,
+              include: 'statuses',
+              ...(fromIso ? { overlapFrom: fromIso } : {}),
+              ...(toIso ? { overlapTo: toIso } : {}),
+            },
+            signal,
+          }),
+          // Leads : total exact + tendance mensuelle (aucune liste plafonnée)
+          api.get('/leads', {
+            params: { page: 1, limit: 1, include: 'monthly', tzOffset, ...periodParams },
+            signal,
+          }),
+          // Conversions : total exact + tendance + répartition par statut
+          api.get('/conversions', {
+            params: {
+              page: 1,
+              limit: 1,
+              include: 'monthly,statuses',
+              tzOffset,
+              ...periodParams,
+            },
+            signal,
+          }),
+          // Tâches les plus urgentes (tri par échéance calculé par le serveur)
+          api.get('/tasks', {
+            params: {
+              page: 1,
+              limit: 5,
+              sortBy: 'dueDate',
+              sortDir: 'asc',
+              hasDueDate: 1,
+              ...(fromIso ? { dueFrom: fromIso } : {}),
+              ...(toIso ? { dueTo: toIso } : {}),
+            },
+            signal,
+          }),
+          // Tâches créées dans la période (KPI « Tâches totales »)
+          api.get('/tasks', { params: { page: 1, limit: 1, ...periodParams }, signal }),
+          // Tâches en retard (ni terminées ni annulées)
+          overdueRangeIsEmpty
+            ? Promise.resolve({ data: { total: 0 } })
+            : api.get('/tasks', {
+                params: {
+                  page: 1,
+                  limit: 1,
+                  dueTo: overdueToIso,
+                  excludeStatus: 'TERMINE,ANNULE',
+                  ...(fromIso ? { dueFrom: fromIso } : {}),
+                },
+                signal,
+              }),
         ]);
 
         const campaignsData =
@@ -385,127 +572,168 @@ export default function Dashboard() {
             ? safeArray<Campaign>(campaignsResult.value.data?.data)
             : [];
 
-        const leadsData =
+        const urgentTasksData =
+          urgentTasksResult.status === 'fulfilled'
+            ? safeArray<Task>(urgentTasksResult.value.data?.data || urgentTasksResult.value.data)
+            : [];
+
+        // Compteurs exacts : issus de la pagination et des agrégats serveur
+        const campaignsTotal =
+          campaignsResult.status === 'fulfilled'
+            ? readListTotal(campaignsResult.value.data?.meta?.total, campaignsData.length)
+            : 0;
+        const leadsTotal =
           leadsResult.status === 'fulfilled'
-            ? safeArray<Lead>(leadsResult.value.data?.data || leadsResult.value.data)
-            : [];
-
-        const tasksData =
-          tasksResult.status === 'fulfilled'
-            ? safeArray<Task>(tasksResult.value.data?.data || tasksResult.value.data)
-            : [];
-
-        const conversionsData =
+            ? readListTotal(leadsResult.value.data?.total, 0)
+            : 0;
+        const conversionsTotal =
           conversionsResult.status === 'fulfilled'
-            ? safeArray<Conversion>(conversionsResult.value.data?.data || conversionsResult.value.data)
+            ? readListTotal(conversionsResult.value.data?.total, 0)
+            : 0;
+        const tasksCreatedTotal =
+          tasksCreatedResult.status === 'fulfilled'
+            ? readListTotal(tasksCreatedResult.value.data?.total, 0)
+            : 0;
+        const overdueTasksTotal =
+          overdueTasksResult.status === 'fulfilled'
+            ? readListTotal(overdueTasksResult.value.data?.total, 0)
+            : 0;
+
+        const campaignStatusCounts: Record<string, number> =
+          campaignsResult.status === 'fulfilled'
+            ? (campaignsResult.value.data?.statusCounts ?? {})
+            : {};
+        const campaignTotalBudget =
+          campaignsResult.status === 'fulfilled'
+            ? toNumber(campaignsResult.value.data?.totalBudget)
+            : 0;
+        const leadMonthlyData: MonthlySeriesPoint[] =
+          leadsResult.status === 'fulfilled' && Array.isArray(leadsResult.value.data?.monthly)
+            ? leadsResult.value.data.monthly
             : [];
+        const conversionMonthlyData: MonthlySeriesPoint[] =
+          conversionsResult.status === 'fulfilled' &&
+          Array.isArray(conversionsResult.value.data?.monthly)
+            ? conversionsResult.value.data.monthly
+            : [];
+        const conversionStatuses: ConversionStatusSummary =
+          conversionsResult.status === 'fulfilled'
+            ? (conversionsResult.value.data?.byStatus ?? {})
+            : {};
+
+        // Aucune écriture d'état si la période a changé entre-temps
+        if (isStale()) return;
 
         setCampaigns(campaignsData);
-        setLeads(leadsData);
-        setTasks(tasksData);
-        //setExpenses(expensesData);
-        setConversions(conversionsData);
+        setTasks(urgentTasksData);
+        setLeadMonthly(leadMonthlyData);
+        setConversionMonthly(conversionMonthlyData);
+        setConversionStatusSummary(conversionStatuses);
 
-        const activeCampaigns = campaignsData.filter((campaign) => {
-          const status = normalizeStatus(campaign.status);
-          return status === 'ACTIVE';
-        }).length;
+        const countCampaignStatus = (...statuses: string[]) =>
+          statuses.reduce((sum, status) => sum + (campaignStatusCounts[status] ?? 0), 0);
 
-        const plannedCampaigns = campaignsData.filter((campaign) => {
-          const status = normalizeStatus(campaign.status);
-          return status === 'PLANIFIEE';
-        }).length;
+        const activeCampaigns = countCampaignStatus('ACTIVE');
 
-        const pausedCampaigns = campaignsData.filter((campaign) => {
-          const status = normalizeStatus(campaign.status);
-          return status === 'EN_PAUSE' || status === 'PAUSED';
-        }).length;
+        const plannedCampaigns = countCampaignStatus('PLANIFIEE');
 
-        const completedCampaigns = campaignsData.filter((campaign) => {
-          const status = normalizeStatus(campaign.status);
-          return status === 'TERMINEE' || status === 'COMPLETED';
-        }).length;
+        const pausedCampaigns = countCampaignStatus('EN_PAUSE', 'PAUSED');
 
-        const overdueTasks = tasksData.filter((task) => {
-          if (!task.dueDate || !isDateValid(task.dueDate)) return false;
-          const due = new Date(task.dueDate);
-          const now = new Date();
-          const isDone = String(task.status || '').trim() === 'Terminé';
-          return due < now && !isDone;
-        }).length;
-
-        const totalConversions = conversionsData.length;
-        const conversionRate =
-          leadsData.length > 0 ? Number(((totalConversions / leadsData.length) * 100).toFixed(1)) : 0;
-
-        const totalCampaignBudget = campaignsData.reduce(
-          (sum, c) => sum + toNumber(c.totalBudget),
-          0
-        );
+        const completedCampaigns = countCampaignStatus('TERMINEE', 'COMPLETED');
 
         setStats({
           activeCampaigns,
-          totalCampaigns: campaignsData.length,
-          totalLeads: leadsData.length,
-          totalTasks: tasksData.length,
-          overdueTasks,
+          totalCampaigns: campaignsTotal,
+          totalLeads: leadsTotal,
+          totalTasks: tasksCreatedTotal,
+          overdueTasks: overdueTasksTotal,
           plannedCampaigns,
           pausedCampaigns,
           completedCampaigns,
-          totalConversions,
-          conversionRate,
-          totalExpenses: totalCampaignBudget,
-          totalBudget: totalCampaignBudget,
-          remainingBudget: 0,
+          totalConversions: conversionsTotal,
+          conversionRate:
+            leadsTotal > 0 ? Number(((conversionsTotal / leadsTotal) * 100).toFixed(1)) : 0,
+          totalBudget: campaignTotalBudget,
         });
 
-        if (campaignsResult.status === 'rejected' && !isSilentHttpError(campaignsResult.reason)) {
+        if (campaignsResult.status === 'rejected' && shouldReportError(campaignsResult.reason)) {
           console.error('Erreur campagnes :', campaignsResult.reason);
         }
-        if (leadsResult.status === 'rejected' && !isSilentHttpError(leadsResult.reason)) {
+        if (leadsResult.status === 'rejected' && shouldReportError(leadsResult.reason)) {
           console.error('Erreur leads :', leadsResult.reason);
         }
-        if (tasksResult.status === 'rejected' && !isSilentHttpError(tasksResult.reason)) {
-          console.error('Erreur tasks :', tasksResult.reason);
-        }
-        if (conversionsResult.status === 'rejected' && !isSilentHttpError(conversionsResult.reason)) {
+        if (conversionsResult.status === 'rejected' && shouldReportError(conversionsResult.reason)) {
           console.error('Erreur conversions :', conversionsResult.reason);
         }
+        if (urgentTasksResult.status === 'rejected' && shouldReportError(urgentTasksResult.reason)) {
+          console.error('Erreur tâches (urgentes) :', urgentTasksResult.reason);
+        }
+        if (
+          tasksCreatedResult.status === 'rejected' &&
+          shouldReportError(tasksCreatedResult.reason)
+        ) {
+          console.error('Erreur tâches (créées) :', tasksCreatedResult.reason);
+        }
+        if (
+          overdueTasksResult.status === 'rejected' &&
+          shouldReportError(overdueTasksResult.reason)
+        ) {
+          console.error('Erreur tâches (en retard) :', overdueTasksResult.reason);
+        }
       } catch (error) {
+        if (isCanceledRequest(error) || isStale()) return;
         console.error(error);
       } finally {
-        setLoadingBase(false);
+        if (!isStale()) setLoadingBase(false);
       }
     };
 
     const fetchRoiData = async () => {
       try {
         setLoadingRoi(true);
-        const roiResult = await api.get('/campaigns/roi/dashboard-summary');
+        // Le revenu est borné à la période ; le coût reste le budget total de la campagne.
+        const roiResult = await api.get('/campaigns/roi/dashboard-summary', {
+          params: periodParams,
+          signal,
+        });
         const roiDashboardData = roiResult.data?.data || roiResult.data;
+        if (isStale()) return;
         setRoiDashboard(roiDashboardData);
       } catch (error) {
+        if (isCanceledRequest(error) || isStale()) return;
         if (!isSilentHttpError(error)) {
           console.error('Erreur ROI dashboard :', error);
         }
       } finally {
-        setLoadingRoi(false);
+        if (!isStale()) setLoadingRoi(false);
       }
     };
 
     fetchBaseData();
     fetchRoiData();
-  }, []);
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [period]);
 
   // Recharge les campagnes après sauvegarde des objectifs KPI (pour rafraîchir la carte)
   const refreshCampaigns = useCallback(async () => {
     try {
-      const res = await api.get('/campaigns', { params: { page: 1, limit: 100 } });
+      const res = await api.get('/campaigns', {
+        params: {
+          page: 1,
+          limit: 100,
+          ...(period.from ? { overlapFrom: period.from.toISOString() } : {}),
+          ...(period.to ? { overlapTo: period.to.toISOString() } : {}),
+        },
+      });
       setCampaigns(safeArray<Campaign>(res.data?.data));
     } catch {
       // Silencieux : on conserve l'état actuel
     }
-  }, []);
+  }, [period]);
 
   const campaignsByStatusData = useMemo(() => {
     return [
@@ -516,91 +744,37 @@ export default function Dashboard() {
     ];
   }, [stats]);
 
-  const budgetData = useMemo(() => {
-    return [
-      {
-        name: 'Budget',
-        montant: stats.totalBudget,
-      },
-      {
-        name: 'Dépenses',
-        montant: stats.totalExpenses,
-      },
-      {
-        name: 'Reste',
-        montant: stats.remainingBudget,
-      },
-    ];
-  }, [stats]);
-
-  const getCutoffDate = (p: Period): Date | null => {
-    const now = new Date();
-    switch (p) {
-      case '7j':
-        return new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
-      case '30j':
-        return new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
-      case '90j':
-        return new Date(now.getFullYear(), now.getMonth() - 3, now.getDate());
-      case 'annee':
-        return new Date(now.getFullYear(), 0, 1);
-      case 'tout':
-      default:
-        return null;
-    }
-  };
-
-  const filteredLeads = useMemo(() => {
-    const cutoff = getCutoffDate(period);
-    if (!cutoff) return leads;
-    return leads.filter((l) => l.createdAt && new Date(l.createdAt) >= cutoff);
-  }, [leads, period]);
-
-  const filteredConversions = useMemo(() => {
-    const cutoff = getCutoffDate(period);
-    if (!cutoff) return conversions;
-    return conversions.filter((c) => c.createdAt && new Date(c.createdAt) >= cutoff);
-  }, [conversions, period]);
-
-  const filteredTasks = useMemo(() => {
-    const cutoff = getCutoffDate(period);
-    if (!cutoff) return tasks;
-    return tasks.filter((t) => t.createdAt && new Date(t.createdAt) >= cutoff);
-  }, [tasks, period]);
-
+  // Tendance mensuelle : agrégée par l'API (aucun plafond de lignes). Seul le libellé
+  // du mois est construit ici (présentation) à partir du mois fourni par le serveur.
   const performanceData = useMemo(() => {
-    try {
-      const monthMap = new Map<string, { name: string; leads: number; conversions: number }>();
+    const monthMap = new Map<
+      string,
+      { key: string; name: string; leads: number; conversions: number }
+    >();
 
-      // Agrège les leads par mois
-      for (const lead of filteredLeads) {
-        if (!lead.createdAt) continue;
-        const d = new Date(lead.createdAt);
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-        const label = d.toLocaleDateString('fr-FR', { month: 'short' });
-        const entry = monthMap.get(key) || { name: label, leads: 0, conversions: 0 };
-        entry.leads++;
-        monthMap.set(key, entry);
+    const registerSeries = (points: MonthlySeriesPoint[], field: 'leads' | 'conversions') => {
+      for (const point of points) {
+        const entry =
+          monthMap.get(point.key) ??
+          {
+            key: point.key,
+            name: new Date(point.year, point.month - 1, 1).toLocaleDateString('fr-FR', {
+              month: 'short',
+            }),
+            leads: 0,
+            conversions: 0,
+          };
+
+        entry[field] += point.count;
+        monthMap.set(point.key, entry);
       }
+    };
 
-      // Agrège les conversions par mois
-      for (const conv of filteredConversions) {
-        if (!conv.createdAt) continue;
-        const d = new Date(conv.createdAt);
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-        const label = d.toLocaleDateString('fr-FR', { month: 'short' });
-        const entry = monthMap.get(key) || { name: label, leads: 0, conversions: 0 };
-        entry.conversions++;
-        monthMap.set(key, entry);
-      }
+    registerSeries(leadMonthly, 'leads');
+    registerSeries(conversionMonthly, 'conversions');
 
-      return Array.from(monthMap.entries())
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([, value]) => value);
-    } catch {
-      return [];
-    }
-  }, [filteredLeads, filteredConversions]);
+    return Array.from(monthMap.values()).sort((a, b) => a.key.localeCompare(b.key));
+  }, [leadMonthly, conversionMonthly]);
 
   const recentCampaigns = useMemo(() => {
     const sorted = [...campaigns].sort((a, b) => {
@@ -612,29 +786,26 @@ export default function Dashboard() {
     return sorted.slice(0, 5);
   }, [campaigns]);
 
-  const urgentTasks = useMemo(() => {
-    const sorted = [...filteredTasks]
-      .filter((task) => task.dueDate)
-      .sort((a, b) => {
-        const da = new Date(a.dueDate || 0).getTime();
-        const db = new Date(b.dueDate || 0).getTime();
-        return da - db;
-      });
-
-    return sorted.slice(0, 5);
-  }, [filteredTasks]);
-
   const activeCampaignCards = useMemo(() => {
     const roiByCampaignId = new Map<number, RoiDashboardCampaignItem>();
-    for (const item of roiDashboard?.topCampaignsByRoi ?? []) {
-      roiByCampaignId.set(item.campaignId, item);
-    }
-    for (const item of roiDashboard?.negativeRoiCampaigns ?? []) {
-      if (!roiByCampaignId.has(item.campaignId)) roiByCampaignId.set(item.campaignId, item);
-    }
-    for (const item of roiDashboard?.nonCalculableRoiCampaigns ?? []) {
-      if (!roiByCampaignId.has(item.campaignId)) roiByCampaignId.set(item.campaignId, item);
-    }
+
+    // Liste complète fournie par l'API : permet de retrouver le ROI (donc le coût,
+    // le revenu et le profit) de TOUTES les campagnes. Les listes top/négatif/non
+    // calculable sont volontairement limitées à 5 éléments : les utiliser seules
+    // laissait certaines campagnes actives sans coût affiché.
+    const registerRoiItems = (items?: RoiDashboardCampaignItem[] | null) => {
+      for (const item of items ?? []) {
+        if (!roiByCampaignId.has(item.campaignId)) {
+          roiByCampaignId.set(item.campaignId, item);
+        }
+      }
+    };
+
+    registerRoiItems(roiDashboard?.campaigns);
+    // Repli (compatibilité avec une API plus ancienne) : listes tronquées
+    registerRoiItems(roiDashboard?.topCampaignsByRoi);
+    registerRoiItems(roiDashboard?.negativeRoiCampaigns);
+    registerRoiItems(roiDashboard?.nonCalculableRoiCampaigns);
 
     return campaigns
       .filter((c) => normalizeStatus(c.status) === 'ACTIVE')
@@ -646,7 +817,13 @@ export default function Dashboard() {
 
         const cost = roi?.totalCost ?? 0;
         const revenue = roi?.totalRevenue ?? 0;
-        const profit = revenue - cost;
+        // Profit : valeur renvoyée par l'API (source unique, arrondie côté serveur).
+        // Recalculer ici ferait diverger l'affichage le jour où la règle ROI évolue.
+        const profit = roi?.netProfit ?? 0;
+        // Le revenu n'est établi qu'avec des ventes confirmées sur la période : un revenu à 0
+        // ne permet pas de conclure à une perte (le coût, lui, est le budget total de la
+        // campagne, non réparti dans le temps).
+        const hasEstablishedRevenue = revenue > 0;
 
         const leadsCount = campaign._count?.leads ?? 0;
         const conversionsCount = campaign._count?.conversions ?? 0;
@@ -699,6 +876,7 @@ export default function Dashboard() {
           revenue,
           cost,
           profit,
+          hasEstablishedRevenue,
           salesCount,
           articleCount: articles.length,
           roiPercent: roi?.roiPercent ?? null,
@@ -712,49 +890,33 @@ export default function Dashboard() {
       });
   }, [campaigns, roiDashboard]);
 
-  const activeCampaignIdsKey = useMemo(
-    () =>
-      activeCampaignCards
-        .map((c) => Number(c.id))
-        .filter((n) => Number.isInteger(n) && n > 0)
-        .sort((a, b) => a - b)
-        .join(','),
-    [activeCampaignCards],
+  /**
+   * Mesures Sage X3 des campagnes actives — CA facturé, clients distincts, et ventes des 3 mois
+   * précédant la campagne.
+   *
+   * UNE MESURE INDÉPENDANTE PAR CAMPAGNE, exécutée en tâche de fond côté API (l'API limite
+   * elle-même la concurrence à 3 mesures simultanées). Chaque carreau s'affiche donc dès que SA
+   * mesure aboutit : une campagne lente, en échec ou en file d'attente ne retarde plus les autres,
+   * et deux mesures d'une même campagne (CA et clients) arrivent ensemble, avec la même source.
+   * Le suivi se fait par interrogation d'état, ce qui met l'affichage à l'abri d'un timeout de
+   * reverse proxy (voir `useMeasureJobs`).
+   */
+  const x3RevenueUrls = activeCampaignCards.map((camp) => `/campaigns/${camp.id}/x3-revenue`);
+  const last3MonthsUrls = activeCampaignCards.map(
+    (camp) => `/campaigns/${camp.id}/sales-last-3-months`,
   );
 
-  // Ventes des 3 mois précédant le début de campagne pour les campagnes actives (batch)
-  useEffect(() => {
-    if (!activeCampaignIdsKey) {
-      setMonthlySalesByCampaign({});
-      setMonthlySalesLoading(false);
-      return;
-    }
+  const {
+    dataByKey: x3RevenueByUrl,
+    loadingKeys: x3LoadingByUrl,
+    restart: restartX3Revenue,
+  } = useMeasureJobs<X3CampaignRevenue>(x3RevenueUrls);
 
-    const ids = activeCampaignIdsKey.split(',').map(Number);
-    let cancelled = false;
-    setMonthlySalesLoading(true);
-
-    api.post('/campaigns/sales-last-3-months', { campaignIds: ids })
-      .then((res) => {
-        if (cancelled) return;
-        const data = res.data?.data || {};
-        const mapped: Record<string, Array<{ key: string; monthLabel: string; quantity: number }>> = {};
-        for (const idStr of Object.keys(data)) {
-          mapped[idStr] = data[idStr]?.months ?? [];
-        }
-        setMonthlySalesByCampaign(mapped);
-      })
-      .catch(() => {
-        if (!cancelled) setMonthlySalesByCampaign({});
-      })
-      .finally(() => {
-        if (!cancelled) setMonthlySalesLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeCampaignIdsKey]);
+  const {
+    dataByKey: last3MonthsByUrl,
+    loadingKeys: last3MonthsLoadingByUrl,
+    restart: restartLast3Months,
+  } = useMeasureJobs<Last3MonthsPayload>(last3MonthsUrls);
 
   const businessAlerts = useMemo(() => {
     const alerts: { id: string; label: string; level: 'high' | 'medium' | 'low' }[] = [];
@@ -806,30 +968,20 @@ export default function Dashboard() {
     return alerts.slice(0, 6);
   }, [campaigns]);
 
-  const budgetUsagePercent =
-    stats.totalBudget != null && stats.totalBudget > 0
-      ? Math.min((stats.totalExpenses / stats.totalBudget) * 100, 100)
-      : 0;
-
   const pieColors = ['#22c55e', '#3b82f6', '#f59e0b', '#64748b'];
 
   const conversionStats = useMemo(() => {
-    const confirmed = filteredConversions.filter((item) => normalizeStatus(item.status) === 'CONFIRMED').length;
-    const pending = filteredConversions.filter((item) => normalizeStatus(item.status) === 'PENDING').length;
-    const cancelled = filteredConversions.filter((item) => normalizeStatus(item.status) === 'CANCELLED').length;
-    const rejected = filteredConversions.filter((item) => normalizeStatus(item.status) === 'REJECTED').length;
-    const confirmedAmount = filteredConversions
-      .filter((item) => normalizeStatus(item.status) === 'CONFIRMED')
-      .reduce((sum, item) => sum + toNumber(item.amount), 0);
+    // Répartition calculée par l'API (agrégation Prisma, aucun plafond de lignes)
+    const summary = (status: string) => conversionStatusSummary[status] ?? { count: 0, amount: 0 };
 
     return {
-      confirmed,
-      pending,
-      cancelled,
-      rejected,
-      confirmedAmount,
+      confirmed: summary('CONFIRMED').count,
+      pending: summary('PENDING').count,
+      cancelled: summary('CANCELLED').count,
+      rejected: summary('REJECTED').count,
+      confirmedAmount: summary('CONFIRMED').amount,
     };
-  }, [filteredConversions]);
+  }, [conversionStatusSummary]);
 
   return (
     <div className="space-y-6">
@@ -848,25 +1000,14 @@ export default function Dashboard() {
               <Plus className="mr-2 h-4 w-4" /> Nouvelle campagne
             </Button>
           )}
-          {/* Filtre période */}
-          <div className="flex items-center gap-2 rounded-xl border-2 border-primary/15 bg-primary/[0.04] px-3 py-1.5 shadow-sm">
-            <Filter className="h-4 w-4 text-primary shrink-0" />
-            <div className="flex items-center gap-0.5">
-              {(['7j', '30j', '90j', 'annee', 'tout'] as Period[]).map((p) => (
-              <button
-                key={p}
-                onClick={() => setPeriod(p)}
-                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                  period === p
-                    ? 'bg-primary text-primary-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
-                }`}
-              >
-                {p === '7j' ? '7j' : p === '30j' ? '30j' : p === '90j' ? '90j' : p === 'annee' ? 'Année' : 'Tout'}
-              </button>
-            ))}
-            </div>
-          </div>
+          {/* Filtre période : fenêtres glissantes + sélecteur calendaire (année / mois) */}
+          {/* Filtre période : fenêtres glissantes + sélecteur calendaire (année / mois) */}
+          <PeriodFilter
+            period={period}
+            onSelectPreset={selectPreset}
+            onSelectCalendar={selectCalendar}
+            onClearCalendar={clearCalendar}
+          />
 
           {loadingBase ? (
             <div className="flex items-center gap-2 rounded-full border px-3 py-1 text-sm text-muted-foreground">
@@ -906,6 +1047,31 @@ export default function Dashboard() {
               const canEditThisCampaign =
                 !!user?.permissions?.canEditAllCampaigns ||
                 String(user?.id) === String(camp.createdById);
+
+              // CA facturé Sage X3 + clients distincts : une mesure INDÉPENDANTE par campagne
+              // (tâche de fond côté API, concurrence limitée par le serveur).
+              const x3RevenueUrl = `/campaigns/${camp.id}/x3-revenue`;
+              const x3Revenue = x3RevenueByUrl[x3RevenueUrl];
+              const x3Perimeter = formatX3Perimeter(x3Revenue);
+              const x3Loading = x3LoadingByUrl[x3RevenueUrl] === true;
+              // Mesure possible uniquement si au moins un article porte un code Sage : sinon
+              // aucun clic ne pourra jamais rien donner — donc pas de bouton (pas de fausse promesse).
+              const x3CanMeasure = !x3Revenue || x3Revenue.articlesMesurables > 0;
+              const x3NotMeasuredTitle = x3CanMeasure
+                ? "Non mesuré : X3 n'a pas répondu. Cliquez sur « Actualiser » pour relancer cette campagne."
+                : 'Non mesurable : aucun article de cette campagne ne porte de code Sage exploitable dans X3.';
+
+              // Ventes des 3 mois : MÊME logique, elle aussi indépendante des autres campagnes.
+              const last3MonthsUrl = `/campaigns/${camp.id}/sales-last-3-months`;
+              const last3Months = last3MonthsByUrl[last3MonthsUrl];
+              const last3MonthsLoading = last3MonthsLoadingByUrl[last3MonthsUrl] === true;
+              // Sans date de début, aucune fenêtre de référence n'existe : pas de bouton.
+              const last3MonthsCanMeasure = !!camp.startDate;
+
+              // Explicite la règle du profit à chaque affichage (aucun calcul silencieux)
+              const profitTooltip = !camp.hasEstablishedRevenue
+                ? `Profit non calculable : aucune vente confirmée sur « ${period.label} ». Le coût correspond au budget total de la campagne (${camp.cost.toLocaleString('fr-FR')} FCFA), montant non réparti dans le temps.`
+                : `Profit = ventes confirmées de la période − budget total de la campagne. Coût non réparti dans le temps : hors période complète, le profit est mécaniquement sous-évalué.`;
 
               return (
                 <div
@@ -1029,14 +1195,29 @@ export default function Dashboard() {
                       <span className="text-muted-foreground">
                         Ventes des 3 mois précédant la campagne
                       </span>
-                      {monthlySalesLoading && (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                      {last3MonthsLoading && (
+                        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          calcul…
+                        </span>
                       )}
                     </div>
                     {(() => {
-                      const salesList = monthlySalesByCampaign[String(camp.id)] ?? [];
+                      const salesList = last3Months?.months ?? [];
                       if (salesList.length === 0) {
-                        return <p className="text-sm text-muted-foreground">—</p>;
+                        return (
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm text-muted-foreground">—</p>
+                            {last3MonthsCanMeasure && !last3MonthsLoading && (
+                              <X3MeasureButton
+                                onClick={() => restartLast3Months(last3MonthsUrl)}
+                                busy={last3MonthsLoading}
+                                label="Actualiser"
+                                busyLabel="Actualisation…"
+                              />
+                            )}
+                          </div>
+                        );
                       }
                       const avg =
                         salesList.reduce((sum, item) => sum + (item.quantity ?? 0), 0) / salesList.length;
@@ -1082,20 +1263,84 @@ export default function Dashboard() {
                       </div>
                     </div>
                     <div className="rounded-xl border bg-background/50 px-3 py-2.5">
-                      <div className="text-xs text-muted-foreground">Revenu</div>
+                      <div
+                        className="text-xs text-muted-foreground"
+                        title="CA facturé des articles (Sage X3) : corrélation de périmètre (tous clients, tous vendeurs). Ce n'est PAS une attribution à la campagne, ni le revenu utilisé par le ROI."
+                      >
+                        CA X3 (facturé)
+                      </div>
                       <div className="text-base font-bold">
-                        {loadingRoi ? (
+                        {x3Loading ? (
                           <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground font-normal">
                             <Loader2 className="h-3 w-3 animate-spin" />
                             Calcul...
                           </span>
+                        ) : x3Revenue?.caArticles == null ? (
+                          <span className="block" title={x3NotMeasuredTitle}>
+                            <span className="block text-muted-foreground">—</span>
+                            {x3Perimeter && (
+                              <span className="block text-[10px] text-muted-foreground font-normal">
+                                {x3Perimeter}
+                              </span>
+                            )}
+                            {x3CanMeasure && (
+                              <X3MeasureButton
+                                onClick={() => restartX3Revenue(x3RevenueUrl)}
+                                busy={x3Loading}
+                                label="Actualiser"
+                                busyLabel="Actualisation…"
+                              />
+                            )}
+                          </span>
                         ) : (
-                          <>{camp.revenue > 0 ? camp.revenue.toLocaleString('fr-FR') : '—'} FCFA</>
+                          <>
+                            {Number(x3Revenue.caArticles).toLocaleString('fr-FR')} FCFA
+                            {x3Perimeter && (
+                              <span className="block text-[10px] text-muted-foreground font-normal">
+                                {x3Perimeter}
+                              </span>
+                            )}
+                          </>
                         )}
                       </div>
                     </div>
                     <div className="rounded-xl border bg-background/50 px-3 py-2.5">
-                      <div className="text-xs text-muted-foreground">Coût</div>
+                      <div
+                        className="text-xs text-muted-foreground"
+                        title="Clients distincts ayant acheté au moins un article de la campagne (Sage X3, tous vendeurs). Corrélation de périmètre : ce n'est PAS une attribution à la campagne."
+                      >
+                        Clients X3 (mesurés)
+                      </div>
+                      <div className="text-base font-bold">
+                        {x3Loading ? (
+                          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground font-normal">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Calcul...
+                          </span>
+                        ) : x3Revenue?.distinctClients == null ? (
+                          <span className="block" title={x3NotMeasuredTitle}>
+                            <span className="block text-muted-foreground">—</span>
+                            {x3CanMeasure && (
+                              <X3MeasureButton
+                                onClick={() => restartX3Revenue(x3RevenueUrl)}
+                                busy={x3Loading}
+                                label="Actualiser"
+                                busyLabel="Actualisation…"
+                              />
+                            )}
+                          </span>
+                        ) : (
+                          Number(x3Revenue.distinctClients).toLocaleString('fr-FR')
+                        )}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border bg-background/50 px-3 py-2.5">
+                      <div
+                        className="text-xs text-muted-foreground"
+                        title="Budget total de la campagne : montant fixe, non réparti dans le temps"
+                      >
+                        Coût
+                      </div>
                       <div className="text-base font-bold">
                         {loadingRoi ? (
                           <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground font-normal">
@@ -1109,16 +1354,27 @@ export default function Dashboard() {
                     </div>
                     <div className="rounded-xl border bg-background/50 px-3 py-2.5">
                       <div className="text-xs text-muted-foreground">Profit</div>
-                      <div className={`text-base font-bold ${camp.profit > 0 ? 'text-green-600' : camp.profit < 0 ? 'text-red-500' : ''}`}>
+                      <div
+                        className={`text-base font-bold ${
+                          !camp.hasEstablishedRevenue
+                            ? ''
+                            : camp.profit > 0
+                              ? 'text-green-600'
+                              : camp.profit < 0
+                                ? 'text-red-500'
+                                : ''
+                        }`}
+                        title={profitTooltip}
+                      >
                         {loadingRoi ? (
                           <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground font-normal">
                             <Loader2 className="h-3 w-3 animate-spin" />
                             Calcul...
                           </span>
+                        ) : camp.hasEstablishedRevenue ? (
+                          `${camp.profit > 0 ? '+' : ''}${camp.profit.toLocaleString('fr-FR')} FCFA`
                         ) : (
-                          <>{camp.cost > 0 || camp.revenue > 0
-                            ? `${camp.profit > 0 ? '+' : ''}${camp.profit.toLocaleString('fr-FR')} FCFA`
-                            : '—'}</>
+                          '—'
                         )}
                       </div>
                     </div>
@@ -1136,7 +1392,12 @@ export default function Dashboard() {
                       </div>
                     </div>
                     <div className="rounded-xl border bg-background/50 px-3 py-2.5">
-                      <div className="text-xs text-muted-foreground">Clients</div>
+                      <div
+                        className="text-xs text-muted-foreground"
+                        title="Nombre de ventes confirmées rattachées à la campagne : c'est ce nombre qui alimente le revenu du ROI. Ces ventes sont saisies dans l'application (via les conversions des leads) et n'ont rien à voir avec les clients X3, qui comptent les acheteurs réels dans Sage."
+                      >
+                        Ventes confirmées (leads → conversions)
+                      </div>
                       <div className="text-base font-bold">{camp.salesCount > 0 ? camp.salesCount : '—'}</div>
                     </div>
                   </div>
@@ -1314,7 +1575,12 @@ export default function Dashboard() {
         <Card className="rounded-2xl cursor-pointer transition hover:shadow-md"
           onClick={() => navigate('/campaigns')}>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Campagnes totales</CardTitle>
+            <CardTitle
+              className="text-sm font-medium"
+              title="Campagnes dont la période chevauche la période sélectionnée"
+            >
+              Campagnes totales
+            </CardTitle>
             <FolderKanban className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -1345,7 +1611,12 @@ export default function Dashboard() {
         <Card className="rounded-2xl cursor-pointer transition hover:shadow-md"
           onClick={() => navigate('/leads')}>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Leads générés</CardTitle>
+            <CardTitle
+              className="text-sm font-medium"
+              title="Leads créés dans la période sélectionnée"
+            >
+              Leads générés
+            </CardTitle>
             <Users className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -1376,7 +1647,12 @@ export default function Dashboard() {
         <Card className="rounded-2xl cursor-pointer transition hover:shadow-md"
           onClick={() => navigate('/conversions')}>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Conversions</CardTitle>
+            <CardTitle
+              className="text-sm font-medium"
+              title="Conversions dont la date de conversion tombe dans la période sélectionnée"
+            >
+              Conversions
+            </CardTitle>
             <TrendingUp className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -1410,7 +1686,12 @@ export default function Dashboard() {
         <Card className="rounded-2xl cursor-pointer transition hover:shadow-md"
           onClick={() => navigate('/tasks')}>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Tâches totales</CardTitle>
+            <CardTitle
+              className="text-sm font-medium"
+              title="Tâches créées dans la période sélectionnée"
+            >
+              Tâches totales
+            </CardTitle>
             <Target className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -1441,7 +1722,12 @@ export default function Dashboard() {
         <Card className="rounded-2xl cursor-pointer transition hover:shadow-md"
           onClick={() => navigate('/tasks')}>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Tâches en retard</CardTitle>
+            <CardTitle
+              className="text-sm font-medium"
+              title="Tâches ni terminées ni annulées dont l'échéance tombe dans la période sélectionnée"
+            >
+              Tâches en retard
+            </CardTitle>
             <Clock3 className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -1518,6 +1804,17 @@ export default function Dashboard() {
       </div>
 
       {/* KPI ROI */}
+      {!period.isAllTime && (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-200/70 bg-amber-50/70 px-4 py-3 text-xs leading-5 text-amber-800 dark:border-amber-500/25 dark:bg-amber-500/5 dark:text-amber-200">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            ROI calculé sur « {period.label} » : le <strong>revenu</strong> est borné à la période,
+            mais le <strong>coût</strong> reste le budget total de la campagne (montant non réparti
+            dans le temps). Sur une période courte, le ROI affiché est donc sous-évalué —
+            choisissez « Tout » pour un ROI cumulé comparable.
+          </span>
+        </div>
+      )}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card className="rounded-2xl">
           <CardHeader className="pb-2">
@@ -1539,7 +1836,7 @@ export default function Dashboard() {
 
         <Card className="rounded-2xl">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Coût total réel</CardTitle>
+            <CardTitle className="text-sm font-medium">Budget total engagé</CardTitle>
           </CardHeader>
           <CardContent>
             {loadingRoi ? (
@@ -1566,8 +1863,17 @@ export default function Dashboard() {
                 <p className="text-xs text-muted-foreground">Calcul en cours…</p>
               </div>
             ) : (
-              <div className="text-2xl font-bold">
-                {formatCurrency(roiDashboard?.totalNetProfit ?? 0)}
+              <div
+                className="text-2xl font-bold"
+                title={
+                  revenueNotEstablished
+                    ? 'Aucune vente confirmée sur la période : le profit n’est pas établi (le coût correspond au budget total des campagnes, pas à une perte)'
+                    : undefined
+                }
+              >
+                {revenueNotEstablished
+                  ? '—'
+                  : formatCurrency(roiDashboard?.totalNetProfit ?? 0)}
               </div>
             )}
           </CardContent>
@@ -1851,27 +2157,23 @@ export default function Dashboard() {
             <CardTitle>Vue budget</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={budgetData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" fontSize={12} />
-                <YAxis fontSize={12} />
-                <Tooltip formatter={(value: any) => formatCurrency(toNumber(value))} />
-                <Bar dataKey="montant" radius={[8, 8, 0, 0]} fill="#8b5cf6" />
-              </BarChart>
-            </ResponsiveContainer>
+            <div className="rounded-xl border bg-background/50 px-4 py-3">
+              <p className="text-xs text-muted-foreground">
+                Budget cumulé des campagnes de la période
+              </p>
+              <p className="text-2xl font-bold mt-1">
+                {stats.totalBudget != null ? formatCurrency(stats.totalBudget) : '—'}
+              </p>
+            </div>
 
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-sm">
-                <span>Taux d’utilisation du budget</span>
-                <span>{budgetUsagePercent.toFixed(1)}%</span>
-              </div>
-              <div className="h-3 w-full overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full rounded-full bg-primary transition-all"
-                  style={{ width: `${budgetUsagePercent}%` }}
-                />
-              </div>
+            <div className="flex items-start gap-2 rounded-xl border border-amber-200/70 bg-amber-50/70 px-4 py-3 text-xs leading-5 text-amber-800 dark:border-amber-500/25 dark:bg-amber-500/5 dark:text-amber-200">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                Suivi des dépenses indisponible : les dépenses n'alimentent aucun indicateur
+                financier (le coût d'une campagne est son budget total, montant non réparti dans le
+                temps). Le graphique « budget / dépenses / reste » a été retiré car il comparait
+                une valeur à elle-même.
+              </span>
             </div>
           </CardContent>
         </Card>
@@ -1953,7 +2255,7 @@ export default function Dashboard() {
             <CardTitle>Tâches urgentes</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {urgentTasks.map((task) => (
+            {tasks.map((task) => (
               <div
                 key={task.id}
                 className="flex items-start justify-between gap-4 rounded-xl border p-4"

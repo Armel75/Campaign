@@ -52,6 +52,9 @@ interface Task {
     email?: string | null;
   } | null;
 
+  /** Identifiant du créateur de la tâche (renvoyé par l'API) — sert à la règle de suppression. */
+  createdById?: number | string | null;
+
   createdAt?: string;
   updatedAt?: string;
 }
@@ -158,6 +161,12 @@ export default function TaskSection({
   const canManageTasks = !!user?.permissions?.canManageTasks;
   const canAssignTasks = !!user?.permissions?.canAssignTasks;
   const canMutateTasks = canManageTasks && !isCampaignCompleted;
+
+  // Suppression d'une tâche : réservée à son créateur (même règle que les deux endpoints
+  // d'API) ; exception : profil disposant de `canDeleteAllCampaigns`.
+  const canDeleteAnyTask = !!user?.permissions?.canDeleteAllCampaigns;
+  const canDeleteTaskRow = (task: Task) =>
+    canMutateTasks && (canDeleteAnyTask || String(task.createdById) === String(user?.id));
 
   useEffect(() => {
     const fetchUsers = async () => {
@@ -443,17 +452,19 @@ export default function TaskSection({
                           Modifier
                         </Button>
 
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          disabled={isCampaignCompleted}
-                          onClick={() => handleDelete(task.id)}
-                          className="flex items-center gap-2"
-                          title={isCampaignCompleted ? 'Campagne terminée' : 'Supprimer'}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                          Supprimer
-                        </Button>
+                        {canDeleteTaskRow(task) && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            disabled={isCampaignCompleted}
+                            onClick={() => handleDelete(task.id)}
+                            className="flex items-center gap-2"
+                            title={isCampaignCompleted ? 'Campagne terminée' : 'Supprimer'}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Supprimer
+                          </Button>
+                        )}
                       </div>
                     </TableCell>
                   )}

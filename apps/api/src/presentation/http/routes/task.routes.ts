@@ -2,6 +2,9 @@ import { Router } from 'express';
 import prisma from '../../../infrastructure/prisma/client';
 import { requireAuth, AuthRequest } from '../middlewares/auth';
 import { getCurrentUserWithRole } from '../../../services/user.service';
+import { parseDateRange, toPrismaDateFilter } from '../../../infrastructure/utils/dateRange';
+import { parseCsvList } from '../../../infrastructure/utils/queryParams';
+import { canDeleteTask } from '../../../services/taskPermissions';
 
 const router = Router();
 
@@ -95,6 +98,19 @@ const TASK_STATUS_LABEL_TO_CODE: Record<string, string> = {
 const allowedStatuses = ['A_FAIRE', 'EN_COURS', 'TERMINE', 'ANNULE'];
 const allowedPriorities = ['FAIBLE', 'MOYENNE', 'ELEVEE', 'URGENTE'];
 
+/** Champs de tri autorisés pour la liste des tâches. */
+const SORTABLE_FIELDS = ['updatedAt', 'createdAt', 'dueDate'] as const;
+type TaskSortField = (typeof SORTABLE_FIELDS)[number];
+
+/**
+ * Forme structurelle compatible avec l'`orderBy` Prisma (aucun cast nécessaire).
+ * Par défaut : `updatedAt desc` — comportement historique inchangé.
+ */
+type TaskOrderBy =
+  | { updatedAt: 'asc' | 'desc' }
+  | { createdAt: 'asc' | 'desc' }
+  | { dueDate: 'asc' | 'desc' };
+
 function normalizeTaskStatus(status?: string) {
   if (!status) return 'A_FAIRE';
   const normalized = TASK_STATUS_LABEL_TO_CODE[String(status).trim()];
@@ -120,8 +136,54 @@ router.get('/', requireAuth, async (req, res, next) => {
     const pageRaw = typeof req.query.page === 'string' ? req.query.page : undefined;
     const limitRaw = typeof req.query.limit === 'string' ? req.query.limit : undefined;
 
+    // Bornes facultatives : `from`/`to` filtrent la date de CRÉATION,
+    // `dueFrom`/`dueTo` filtrent l'ÉCHÉANCE (`dueDate`).
+    const createdRange = parseDateRange(req.query as Record<string, unknown>, 'from', 'to');
+    const dueRange = parseDateRange(req.query as Record<string, unknown>, 'dueFrom', 'dueTo');
+    const rangeError = createdRange.error || dueRange.error;
+    if (rangeError) {
+      return res.status(400).json({ message: rangeError });
+    }
+    const createdAtFilter = toPrismaDateFilter(createdRange);
+    const dueDateFilter = toPrismaDateFilter(dueRange);
+
+    // `?excludeStatus=TERMINE,ANNULE` — une valeur unique reste acceptée
+    const excludeStatuses = parseCsvList(req.query.excludeStatus, allowedStatuses);
+    if (excludeStatuses.invalid.length > 0) {
+      return res.status(400).json({
+        message: `Statut à exclure invalide : ${excludeStatuses.invalid.join(', ')}.`,
+      });
+    }
+
+    // Tri facultatif (`?sortBy=dueDate&sortDir=asc`) — par défaut : updatedAt desc
+    const rawSortBy = typeof req.query.sortBy === 'string' ? req.query.sortBy.trim() : '';
+    const rawSortDir = typeof req.query.sortDir === 'string' ? req.query.sortDir.trim() : '';
+
+    if (rawSortBy && !SORTABLE_FIELDS.includes(rawSortBy as TaskSortField)) {
+      return res.status(400).json({ message: 'Champ de tri invalide.' });
+    }
+
+    if (rawSortDir && rawSortDir !== 'asc' && rawSortDir !== 'desc') {
+      return res.status(400).json({ message: 'Direction de tri invalide (asc ou desc).' });
+    }
+
+    const sortDirection: 'asc' | 'desc' = rawSortDir === 'asc' ? 'asc' : 'desc';
+    const taskOrderBy: TaskOrderBy =
+      rawSortBy === 'dueDate'
+        ? { dueDate: sortDirection }
+        : rawSortBy === 'createdAt'
+          ? { createdAt: sortDirection }
+          : { updatedAt: rawSortBy ? sortDirection : 'desc' };
+
+    // `?hasDueDate=1` : ne retenir que les tâches ayant une échéance
+    // (indispensable pour trier par `dueDate` : en T-SQL les NULL remontent en premier)
+    const hasDueDateOnly =
+      String(req.query.hasDueDate) === '1' || String(req.query.hasDueDate) === 'true';
+
     const hasServerQuery =
-      !!search || !!status || !!priority || !!pageRaw || !!limitRaw;
+      !!search || !!status || !!priority || !!pageRaw || !!limitRaw ||
+      !!createdAtFilter || !!dueDateFilter || excludeStatuses.values.length > 0 ||
+      !!rawSortBy || !!rawSortDir || hasDueDateOnly;
 
     if (status && !allowedStatuses.includes(status)) {
       return res.status(400).json({
@@ -208,6 +270,22 @@ router.get('/', requireAuth, async (req, res, next) => {
       filters.push({ priority });
     }
 
+    if (createdAtFilter) {
+      filters.push({ createdAt: createdAtFilter });
+    }
+
+    if (dueDateFilter) {
+      filters.push({ dueDate: dueDateFilter });
+    }
+
+    if (hasDueDateOnly) {
+      filters.push({ dueDate: { not: null } });
+    }
+
+    if (excludeStatuses.values.length > 0) {
+      filters.push({ status: { notIn: excludeStatuses.values } });
+    }
+
     if (search) {
       filters.push(searchFilter);
     }
@@ -278,7 +356,7 @@ router.get('/', requireAuth, async (req, res, next) => {
             },
           },
         },
-        orderBy: { updatedAt: 'desc' },
+        orderBy: taskOrderBy,
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -672,8 +750,12 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
       return res.status(404).json({ message: 'Tâche introuvable' });
     }
 
-    if (!canEditTask(currentUser, existingTask.createdById)) {
-      return res.status(403).json({ message: 'Accès refusé à cette tâche' });
+    // Règle métier : seul le créateur de la tâche peut la supprimer
+    // (exception : profil disposant de `canDeleteAllCampaigns`).
+    if (!canDeleteTask(currentUser.id, currentUser.role, existingTask.createdById)) {
+      return res.status(403).json({
+        message: 'Accès refusé : seul le créateur de la tâche peut la supprimer',
+      });
     }
 
     const campaign = await prisma.campaign.findUnique({

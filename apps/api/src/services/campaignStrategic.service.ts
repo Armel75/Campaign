@@ -1,13 +1,9 @@
 import prisma from '../infrastructure/prisma/client';
 import {
-  getSalesAmountByArticle,
-  ArticleCodeRef,
-} from './x3Sales.service';
-import { mapLimit } from '../infrastructure/utils/async';
-import {
   TtlCache,
   DASHBOARD_CACHE_TTL_MS,
 } from '../infrastructure/cache/ttlCache';
+import { resolveRoi, CampaignRoiStatus } from './roiStatus';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -23,6 +19,8 @@ export type ProfitabilityByObjective = {
   totalCost: number;
   totalProfit: number;
   roiPercent: number | null;
+  /** `NO_ESTABLISHED_REVENUE` ⇒ ni ROI ni profit affichables (aucune vente confirmée). */
+  roiStatus: CampaignRoiStatus;
 };
 
 export type AcquisitionCosts = {
@@ -57,6 +55,7 @@ export type StrategicOverview = {
   totalRevenue: number;
   totalProfit: number;
   globalRoiPercent: number | null;
+  globalRoiStatus: CampaignRoiStatus;
 };
 
 export type StrategicDashboardSummary = {
@@ -123,21 +122,14 @@ async function computeStrategicDashboardSummary(): Promise<StrategicDashboardSum
           articles: true,
         },
       },
-      articles: {
-        select: {
-          id: true,
-          soldQuantity: true,
-          codeSageX3: true,
-          codeSage100: true,
-          campaignId: true,
-        },
-      },
       conversions: {
         select: {
           id: true,
           amount: true,
           status: true,
           type: true,
+          // `conversionDate` = date métier utilisée pour dater le revenu mensuel
+          conversionDate: true,
           createdAt: true,
         },
       },
@@ -148,14 +140,6 @@ async function computeStrategicDashboardSummary(): Promise<StrategicDashboardSum
       budgetPlan: {
         select: {
           currency: true,
-          budgetLines: {
-            select: {
-              id: true,
-              expenses: {
-                select: { amount: true },
-              },
-            },
-          },
         },
       },
     },
@@ -183,9 +167,6 @@ async function computeStrategicDashboardSummary(): Promise<StrategicDashboardSum
       totalBudget: number;
       totalRevenue: number;
       totalCost: number;
-      articleRefs: ArticleCodeRef[];
-      startDate: Date;
-      endDate: Date;
     }
   >();
 
@@ -204,24 +185,43 @@ async function computeStrategicDashboardSummary(): Promise<StrategicDashboardSum
     }
   >();
 
+  /**
+   * Accès (ou création) du seau mensuel correspondant à une date.
+   * Extrait du corps de boucle pour pouvoir imputer le budget d'une campagne à son
+   * **mois de début**, alors que les autres indicateurs restent datés sur `createdAt`.
+   */
+  const getOrCreateMonthlyBucket = (date: Date) => {
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1;
+    const key = `${year}-${month}`;
+
+    let entry = monthlyMap.get(key);
+
+    if (!entry) {
+      entry = {
+        year,
+        month,
+        campaignsCreated: new Set(),
+        campaignsActive: new Set(),
+        newLeads: new Set(),
+        newConversions: new Set(),
+        confirmedRevenue: 0,
+        totalCost: 0,
+      };
+      monthlyMap.set(key, entry);
+    }
+
+    return entry;
+  };
+
   for (const campaign of campaigns) {
     const budget = toNumber(campaign.totalBudget);
     totalBudget += budget;
 
-    // Dépenses via budget lines
-    let campaignExpenses = 0;
-    for (const line of campaign.budgetPlan?.budgetLines ?? []) {
-      for (const expense of line.expenses) {
-        campaignExpenses += toNumber(expense.amount);
-      }
-    }
-
-    // Si aucune dépense réelle n'est enregistrée, on considère que
-    // le budget saisi sur la campagne = la dépense (prévision = réalisation)
-    if (campaignExpenses === 0 && budget > 0) {
-      campaignExpenses = budget;
-    }
-    totalExpenses += campaignExpenses;
+    // RÈGLE MÉTIER UNIQUE : le coût d'une campagne est son budget total.
+    // Aucune lecture de dépenses — plus de double convention budget / dépenses.
+    const campaignCost = budget;
+    totalExpenses += campaignCost;
 
     const status = String(campaign.status || '').trim().toUpperCase();
     if (status === 'ACTIVE') activeCampaigns++;
@@ -258,9 +258,6 @@ async function computeStrategicDashboardSummary(): Promise<StrategicDashboardSum
           totalBudget: 0,
           totalRevenue: 0,
           totalCost: 0,
-          articleRefs: [],
-          startDate: campaign.startDate,
-          endDate: campaign.endDate,
         });
       }
 
@@ -268,48 +265,22 @@ async function computeStrategicDashboardSummary(): Promise<StrategicDashboardSum
       entry.campaignCount++;
       entry.totalBudget += budget;
       entry.totalRevenue += campaignConfirmedRevenue;
-      entry.totalCost += campaignExpenses;
-      entry.startDate =
-        !entry.startDate || campaign.startDate < entry.startDate
-          ? campaign.startDate
-          : entry.startDate;
-      entry.endDate =
-        !entry.endDate || (campaign.endDate && campaign.endDate > entry.endDate)
-          ? campaign.endDate
-          : entry.endDate;
-
-      // Collecter les références d'articles pour le calcul X3
-      for (const article of campaign.articles) {
-        if (article.codeSage100 || article.codeSageX3) {
-          entry.articleRefs.push({
-            articleId: article.id,
-            codeSage100: article.codeSage100,
-            codeSageX3: article.codeSageX3,
-          });
-        }
-      }
+      entry.totalCost += campaignCost;
     }
 
     // ── Tendances mensuelles ──────────────────────────────────────────
+    // Le budget est imputé au MOIS DE DÉBUT de la campagne (règle validée).
+    const startDate = campaign.startDate ? new Date(campaign.startDate) : null;
+    if (startDate && !Number.isNaN(startDate.getTime())) {
+      getOrCreateMonthlyBucket(startDate).totalCost += campaignCost;
+    }
+
     const createdDate = campaign.createdAt ? new Date(campaign.createdAt) : null;
     if (createdDate) {
       const key = `${createdDate.getFullYear()}-${createdDate.getMonth() + 1}`;
-      if (!monthlyMap.has(key)) {
-        monthlyMap.set(key, {
-          year: createdDate.getFullYear(),
-          month: createdDate.getMonth() + 1,
-          campaignsCreated: new Set(),
-          campaignsActive: new Set(),
-          newLeads: new Set(),
-          newConversions: new Set(),
-          confirmedRevenue: 0,
-          totalCost: 0,
-        });
-      }
-      const entry = monthlyMap.get(key)!;
+      const entry = getOrCreateMonthlyBucket(createdDate);
       entry.campaignsCreated.add(campaign.id);
       if (status === 'ACTIVE') entry.campaignsActive.add(campaign.id);
-      entry.totalCost += campaignExpenses;
 
       // Leads créés ce mois-ci
       for (const lead of campaign.leads) {
@@ -322,59 +293,44 @@ async function computeStrategicDashboardSummary(): Promise<StrategicDashboardSum
         }
       }
 
-      // Conversions créées ce mois-ci
-      for (const conv of campaign.conversions) {
-        if (conv.createdAt) {
-          const convDate = new Date(conv.createdAt);
-          const convKey = `${convDate.getFullYear()}-${convDate.getMonth() + 1}`;
-          if (convKey === key) {
-            entry.newConversions.add(conv.id);
-            if (
-              String(conv.status || '').trim().toUpperCase() === 'CONFIRMED' &&
-              String(conv.type || '').trim().toUpperCase() === 'SALE'
-            ) {
-              entry.confirmedRevenue += toNumber(conv.amount);
-            }
-          }
+    }
+
+    // ── Conversions : rattachées à LEUR propre mois, indépendamment de la campagne ──
+    // Avant, elles n'étaient comptées que si elles tombaient dans le mois de CRÉATION de
+    // la campagne : toute vente convertie plus tard était purement perdue pour le graphique.
+    for (const conv of campaign.conversions) {
+      const createdConvDate = conv.createdAt ? new Date(conv.createdAt) : null;
+      if (createdConvDate && !Number.isNaN(createdConvDate.getTime())) {
+        getOrCreateMonthlyBucket(createdConvDate).newConversions.add(conv.id);
+      }
+
+      if (
+        String(conv.status || '').trim().toUpperCase() === 'CONFIRMED' &&
+        String(conv.type || '').trim().toUpperCase() === 'SALE'
+      ) {
+        // Revenu daté par la date métier (`conversionDate`), comme partout ailleurs.
+        const convBusinessDate = conv.conversionDate
+          ? new Date(conv.conversionDate)
+          : createdConvDate;
+
+        if (convBusinessDate && !Number.isNaN(convBusinessDate.getTime())) {
+          getOrCreateMonthlyBucket(convBusinessDate).confirmedRevenue += toNumber(conv.amount);
         }
       }
     }
   }
 
-  // ── 3. Revenus X3 par objectif ─────────────────────────────────────────
-  // On enrichit chaque objectif avec les revenus réels depuis Sage X3.
-  // Les appels X3 sont PARALLÉLISÉS (concurrence limitée, pool X3 max 10).
+  // ── 3. Rentabilité par objectif ────────────────────────────────────────
+  // Revenu = conversions CONFIRMED de type SALE uniquement (règle métier unique) :
+  // plus d'enrichissement Sage X3, non attribuable à une campagne ni à un objectif.
   const objectiveEntries = Array.from(objectiveMap.entries());
-  const x3Revenues = await mapLimit(objectiveEntries, 5, async ([, objEntry]) => {
-    if (objEntry.articleRefs.length === 0 || !objEntry.startDate || !objEntry.endDate) {
-      return 0;
-    }
-    try {
-      const effectiveEnd =
-        objEntry.endDate > new Date() ? new Date() : objEntry.endDate;
-      const salesAmounts = await getSalesAmountByArticle(
-        objEntry.articleRefs,
-        objEntry.startDate,
-        effectiveEnd,
-      );
-      return Object.values(salesAmounts).reduce((s, v) => s + v, 0);
-    } catch {
-      // Silently fail — les données X3 ne sont pas critiques
-      return 0;
-    }
-  });
 
   const profitabilityByObjective: ProfitabilityByObjective[] = objectiveEntries.map(
-    ([objId, objEntry], index) => {
-      const x3Revenue = x3Revenues[index] ?? 0;
-      const totalRevenue = objEntry.totalRevenue + x3Revenue;
+    ([objId, objEntry]) => {
+      const totalRevenue = objEntry.totalRevenue;
       const totalProfit = totalRevenue - objEntry.totalCost;
-      const roiPercent =
-        objEntry.totalCost > 0
-          ? roundTo2(((totalRevenue - objEntry.totalCost) / objEntry.totalCost) * 100)
-          : totalRevenue > 0
-            ? null // Revenu sans coût → non calculable
-            : null;
+      // Statut + pourcentage : calcul partagé (services/roiStatus.ts)
+      const { roiStatus, roiPercent } = resolveRoi(objEntry.totalCost, totalRevenue);
 
       return {
         objectiveId: objId,
@@ -385,7 +341,8 @@ async function computeStrategicDashboardSummary(): Promise<StrategicDashboardSum
         totalRevenueFromConversions: roundTo2(objEntry.totalRevenue),
         totalCost: roundTo2(objEntry.totalCost),
         totalProfit: roundTo2(totalProfit),
-        roiPercent,
+        roiPercent: roiPercent === null ? null : roundTo2(roiPercent),
+        roiStatus,
       };
     },
   );
@@ -431,12 +388,11 @@ async function computeStrategicDashboardSummary(): Promise<StrategicDashboardSum
   // ── 6. Vue d'ensemble ──────────────────────────────────────────────────
   const totalRevenue = totalRevenueFromConversions;
   const totalProfit = totalRevenue - totalExpenses;
-  const globalRoiPercent =
-    totalExpenses > 0
-      ? roundTo2(((totalRevenue - totalExpenses) / totalExpenses) * 100)
-      : totalRevenue > 0
-        ? null
-        : null;
+  // Statut + pourcentage : calcul partagé (services/roiStatus.ts) — plus de ternaire morte.
+  const { roiStatus: globalRoiStatus, roiPercent: globalRoiPercent } = resolveRoi(
+    totalExpenses,
+    totalRevenue,
+  );
 
   const overview: StrategicOverview = {
     totalCampaigns: campaigns.length,
@@ -446,7 +402,8 @@ async function computeStrategicDashboardSummary(): Promise<StrategicDashboardSum
     totalExpenses: roundTo2(totalExpenses),
     totalRevenue: roundTo2(totalRevenue),
     totalProfit: roundTo2(totalProfit),
-    globalRoiPercent,
+    globalRoiPercent: globalRoiPercent === null ? null : roundTo2(globalRoiPercent),
+    globalRoiStatus,
   };
 
   return {

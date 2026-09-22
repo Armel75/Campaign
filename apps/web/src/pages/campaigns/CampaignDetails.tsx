@@ -32,6 +32,8 @@ import TaskSection from './components/TaskSection';
 import CampaignArticlesSection from './components/CampaignArticlesSection';
 import ExportButtons from './components/ExportButtons';
 import KpiTargetModal from '@/components/KpiTargetModal';
+import X3MeasureButton from '@/components/X3MeasureButton';
+import { useMeasureJobs } from '@/lib/useMeasureJobs';
 
 interface CampaignAttachment {
   id: string;
@@ -153,8 +155,28 @@ interface CampaignRoiSummary {
   totalRevenue: number;
   netProfit: number;
   roiPercent: number | null;
-  roiStatus: 'CALCULATED' | 'ZERO_COST_ZERO_REVENUE' | 'NON_CALCULABLE_ZERO_COST';
+  roiStatus:
+    | 'CALCULATED'
+    | 'ZERO_COST_ZERO_REVENUE'
+    | 'NON_CALCULABLE_ZERO_COST'
+    | 'NO_ESTABLISHED_REVENUE';
   confirmedSalesCount: number;
+}
+
+/**
+ * CA facturé Sage X3 des articles de la campagne + clients distincts (Sage X3).
+ * Indicateurs SÉPARÉS du revenu attribué : corrélations de périmètre (tous clients,
+ * tous vendeurs), jamais des attributions à la campagne.
+ */
+interface CampaignX3ArticlesRevenue {
+  caArticles: number | null;
+  /** Clients distincts ayant acheté au moins un article de la campagne. `null` = non mesuré. */
+  distinctClients: number | null;
+  articlesCount: number;
+  articlesMesurables: number;
+  articlesNonMesures: number;
+  codeDoublons: number;
+  computedAt?: string;
 }
 
 interface CampaignDetailsType {
@@ -253,7 +275,7 @@ function getConversionStatusBadge(status?: string) {
 
 const KPI_GLOBAL_LABELS: Record<string, { label: string; suffix: string }> = {
   SOLD_QUANTITY: { label: 'Qté totale à vendre', suffix: 'unités' },
-  REVENUE: { label: 'Revenu total', suffix: 'FCFA' },
+  REVENUE: { label: 'Objectif de revenu (KPI)', suffix: 'FCFA' },
   LEADS: { label: 'Leads', suffix: 'leads' },
   CONVERSIONS: { label: 'Conversions', suffix: 'conversions' },
   CLIENTS: { label: 'Clients', suffix: 'clients' },
@@ -299,6 +321,30 @@ export default function CampaignDetails() {
       setRoiLoading(false);
     }
   };
+
+  /**
+   * Mesure X3 (CA facturé + clients distincts) — indicateur SÉPARÉ du revenu attribué
+   * (corrélation de périmètre, pas attribution).
+   *
+   * Elle est exécutée en TÂCHE DE FOND côté API et suivie par interrogation d'état
+   * (`useMeasureJobs`, la même implémentation que le tableau de bord) : c'est ce qui permet de
+   * rester sur « Calcul… » AUSSI LONGTEMPS QU'IL FAUT sans qu'une requête HTTP longue soit coupée
+   * par le reverse proxy.
+   */
+  const x3RevenueUrl = id ? `/campaigns/${id}/x3-revenue` : '';
+  const x3RevenueUrls = x3RevenueUrl ? [x3RevenueUrl] : [];
+
+  const {
+    dataByKey: x3ByUrl,
+    loadingKeys: x3LoadingByUrl,
+    restart: restartX3,
+  } = useMeasureJobs<CampaignX3ArticlesRevenue>(x3RevenueUrls);
+
+  const x3Revenue = x3ByUrl[x3RevenueUrl] ?? null;
+  const x3Loading = x3LoadingByUrl[x3RevenueUrl] === true;
+
+  /** Bouton « Mesurer » : relance la mesure même si un résultat récent est déjà connu. */
+  const remeasureX3 = () => restartX3(x3RevenueUrl);
 
   useEffect(() => {
     if (id) {
@@ -471,6 +517,12 @@ export default function CampaignDetails() {
             Non calculable
           </Badge>
         );
+      case 'NO_ESTABLISHED_REVENUE':
+        return (
+          <Badge className="bg-amber-100 text-amber-800 border-amber-200 hover:bg-amber-100">
+            Revenu non établi
+          </Badge>
+        );
       default:
         return <Badge variant="outline">—</Badge>;
     }
@@ -479,11 +531,13 @@ export default function CampaignDetails() {
   const getRoiStatusExplanation = (status?: CampaignRoiSummary['roiStatus']) => {
     switch (status) {
       case 'CALCULATED':
-        return 'Le ROI est calculé à partir des ventes confirmées (type SALE) et des dépenses réelles enregistrées pour cette campagne.';
+        return 'Le ROI compare les ventes confirmées (type SALE) de la campagne à son budget total : (Revenu − Budget) / Budget.';
       case 'ZERO_COST_ZERO_REVENUE':
-        return 'Aucune dépense réelle et aucun revenu confirmé ne sont encore enregistrés pour cette campagne.';
+        return 'Aucun budget n’est renseigné et aucune vente confirmée n’est enregistrée pour cette campagne.';
       case 'NON_CALCULABLE_ZERO_COST':
-        return 'Le ROI ne peut pas être calculé car aucune dépense réelle n’est encore enregistrée pour cette campagne.';
+        return 'Le ROI ne peut pas être calculé car aucun budget n’est renseigné sur cette campagne.';
+      case 'NO_ESTABLISHED_REVENUE':
+        return 'Le ROI n’est pas établi : aucune vente confirmée (type SALE) n’est enregistrée pour cette campagne, alors que son budget total est engagé dans le coût.';
       default:
         return 'Aucune information complémentaire disponible pour le calcul du ROI.';
     }
@@ -579,6 +633,10 @@ export default function CampaignDetails() {
       });
   }, [kpiTargets, totalSold, roiSummary, campaign, conversions]);
 
+  // Mesure X3 à la demande : affichée uniquement si elle est POSSIBLE (au moins un article
+  // codifié). Sinon le bouton promettait une issue qui n'existe pas.
+  const x3CanMeasure = !x3Revenue || x3Revenue.articlesMesurables > 0;
+
   const stats = [
     {
       label: 'Articles',
@@ -593,18 +651,103 @@ export default function CampaignDetails() {
       currentValue: totalSold,
     },
     {
-      label: 'Revenu total',
-      value: roiLoading ? (
+      // Revenu SAISI dans le formulaire « Objectifs KPI » (cible), et non le revenu mesuré
+      // (somme des conversions confirmées) : ce dernier est déjà suivi dans le bloc
+      // « Objectifs KPI » ci-dessous et vaut 0 tant qu'aucune conversion n'est confirmée.
+      label: 'Objectif de revenu (KPI)',
+      value:
+        kpiTargets.REVENUE > 0 ? (
+          <span
+            className="block"
+            title="Objectif de revenu saisi dans le formulaire « Objectifs KPI » de la campagne. Ce n'est PAS un revenu mesuré : le suivi de l'atteinte figure dans le bloc « Objectifs KPI » ci-dessous."
+          >
+            {Number(kpiTargets.REVENUE).toLocaleString('fr-FR')} FCFA
+          </span>
+        ) : (
+          <span
+            className="block text-muted-foreground"
+            title="Aucun objectif de revenu défini : renseignez-le via le formulaire « Objectifs KPI » de la campagne."
+          >
+            —
+          </span>
+        ),
+      icon: TrendingUp,
+    },
+    {
+      label: 'CA facturé des articles (Sage X3)',
+      value: x3Loading ? (
         <span className="inline-flex items-center gap-1.5 text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
           <span>Calcul…</span>
         </span>
-      ) : roiSummary?.totalRevenue != null && roiSummary.totalRevenue > 0
-        ? Number(roiSummary.totalRevenue).toLocaleString('fr-FR') + ' FCFA'
-        : '—',
-      icon: TrendingUp,
-      kpiName: 'REVENUE',
-      currentValue: roiSummary?.totalRevenue ?? 0,
+      ) : x3Revenue?.caArticles === null || x3Revenue?.caArticles === undefined ? (
+        <span
+          className="block"
+          title={
+            x3CanMeasure
+              ? "Non mesuré : X3 n'a pas répondu dans le délai imparti. Cliquez sur « Mesurer » pour relancer (quelques secondes)."
+              : 'Non mesurable : aucun article de cette campagne ne porte de code Sage exploitable dans X3.'
+          }
+        >
+          <span className="block text-muted-foreground">—</span>
+          {x3Revenue && (
+            <span className="block text-xs font-normal text-muted-foreground">
+              {x3Revenue.articlesMesurables}/{x3Revenue.articlesCount} article(s)
+            </span>
+          )}
+          {x3CanMeasure && <X3MeasureButton onClick={remeasureX3} busy={x3Loading} />}
+        </span>
+      ) : (
+        <span
+          className="block"
+          title="Corrélation de périmètre (tous clients, tous vendeurs) : ce n'est PAS une attribution à la campagne, ni le revenu utilisé par le ROI."
+        >
+          <span className="block">
+            {Number(x3Revenue.caArticles).toLocaleString('fr-FR')} FCFA
+          </span>
+          <span className="block text-xs font-normal text-muted-foreground">
+            {x3Revenue.articlesMesurables}/{x3Revenue.articlesCount} article(s)
+          </span>
+        </span>
+      ),
+      icon: BarChart3,
+    },
+    {
+      label: 'Clients X3 (mesurés)',
+      value: x3Loading ? (
+        <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>Calcul…</span>
+        </span>
+      ) : x3Revenue?.distinctClients === null || x3Revenue?.distinctClients === undefined ? (
+        <span
+          className="block"
+          title={
+            x3CanMeasure
+              ? "Non mesuré : X3 n'a pas répondu dans le délai imparti. Cliquez sur « Mesurer » pour relancer (quelques secondes)."
+              : 'Non mesurable : aucun article de cette campagne ne porte de code Sage exploitable dans X3.'
+          }
+        >
+          <span className="block text-muted-foreground">—</span>
+          {x3Revenue && (
+            <span className="block text-xs font-normal text-muted-foreground">
+              {x3Revenue.articlesMesurables}/{x3Revenue.articlesCount} article(s)
+            </span>
+          )}
+          {x3CanMeasure && <X3MeasureButton onClick={remeasureX3} busy={x3Loading} />}
+        </span>
+      ) : (
+        <span
+          className="block"
+          title="Clients distincts ayant acheté au moins un article de la campagne (Sage X3, tous vendeurs). Corrélation de périmètre : ce n'est PAS une attribution à la campagne."
+        >
+          <span className="block">{Number(x3Revenue.distinctClients).toLocaleString('fr-FR')}</span>
+          <span className="block text-xs font-normal text-muted-foreground">
+            {x3Revenue.articlesMesurables}/{x3Revenue.articlesCount} article(s)
+          </span>
+        </span>
+      ),
+      icon: Users,
     },
     {
       label: 'Leads',
@@ -624,7 +767,7 @@ export default function CampaignDetails() {
       currentValue: campaign?._count?.conversions ?? conversions.length,
     },
     {
-      label: 'Clients',
+      label: 'Ventes confirmées (leads → conversions)',
       value: roiLoading ? (
         <span className="inline-flex items-center gap-1.5 text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
@@ -791,7 +934,10 @@ export default function CampaignDetails() {
                     </p>
                   </div>
                   {monthlySales === null && (
-                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      calcul…
+                    </span>
                   )}
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -1279,14 +1425,16 @@ export default function CampaignDetails() {
                 <PropertyRow label="Canal" value={displayChannels} />
                 <PropertyRow label="Budget total" icon={BarChart3} value={campaign.totalBudget != null ? Number(campaign.totalBudget).toLocaleString('fr-FR') + ' FCFA' : '—'} />
                 <PropertyRow label="Cible" value={displayTargetAudiences} />
-                <PropertyRow label="Responsable" value={campaign.manager || campaign.owner || '—'} />
-                <PropertyRow label="Localisation" value={campaign.location || '—'} />
               </CardContent>
             </Card>
 
             <Card>
               <CardHeader>
                 <CardTitle>ROI de la campagne</CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Cumul de la campagne (toutes périodes). Le tableau de bord propose la même
+                  lecture filtrée par période.
+                </p>
               </CardHeader>
               <CardContent className="pt-0">
                 {roiLoading ? (
@@ -1307,9 +1455,11 @@ export default function CampaignDetails() {
                     <PropertyRow
                       label="ROI"
                       value={
-                        roiSummary?.roiPercent === null
-                          ? 'Non calculable (coût = 0)'
-                          : formatRoiDisplaySafe(roiSummary?.roiPercent)
+                        roiSummary?.roiStatus === 'NO_ESTABLISHED_REVENUE'
+                          ? 'Non établi (aucune vente confirmée)'
+                          : roiSummary?.roiPercent === null
+                            ? 'Non calculable (coût = 0)'
+                            : formatRoiDisplaySafe(roiSummary?.roiPercent)
                       }
                     />
                     <PropertyRow

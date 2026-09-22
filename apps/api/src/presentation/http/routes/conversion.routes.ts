@@ -2,6 +2,9 @@ import { Router } from 'express';
 import prisma from '../../../infrastructure/prisma/client';
 import { requireAuth, AuthRequest } from '../middlewares/auth';
 import { requirePermission } from '../middlewares/permissions';
+import { parseDateRange, toPrismaDateFilter } from '../../../infrastructure/utils/dateRange';
+import { parseIncludeList } from '../../../infrastructure/utils/queryParams';
+import { buildMonthlyBuckets, parseTzOffsetMinutes } from '../../../infrastructure/utils/monthlyBuckets';
 
 const router = Router();
 
@@ -132,8 +135,19 @@ router.get(
       const pageRaw = typeof req.query.page === 'string' ? req.query.page : undefined;
       const limitRaw = typeof req.query.limit === 'string' ? req.query.limit : undefined;
 
+      // Bornes de période (facultatives) appliquées à la date de conversion
+      const conversionRange = parseDateRange(req.query as Record<string, unknown>);
+      if (conversionRange.error) {
+        return res.status(400).json({ message: conversionRange.error });
+      }
+      const conversionDateFilter = toPrismaDateFilter(conversionRange);
+
+      // Agrégations facultatives (`?include=monthly,statuses`)
+      const includeList = parseIncludeList(req.query.include);
+
       const hasServerQuery =
-        !!search || !!status || !!type || !!leadId || !!campaignId || !!pageRaw || !!limitRaw;
+        !!search || !!status || !!type || !!leadId || !!campaignId || !!pageRaw || !!limitRaw ||
+        !!conversionDateFilter || includeList.length > 0;
 
       if (status && !allowedConversionStatuses.includes(status)) {
         return res.status(400).json({
@@ -167,6 +181,10 @@ router.get(
 
       if (campaignId) {
         filters.push({ campaignId });
+      }
+
+      if (conversionDateFilter) {
+        filters.push({ conversionDate: conversionDateFilter });
       }
 
       if (status) {
@@ -307,12 +325,51 @@ router.get(
         }),
       ]);
 
+      // Tendance mensuelle (date métier de la conversion) : aucun plafond de lignes
+      const monthly = includeList.includes('monthly')
+        ? buildMonthlyBuckets(
+            (
+              await prisma.conversion.findMany({
+                where: whereClause,
+                select: { conversionDate: true },
+              })
+            ).map((row) => row.conversionDate),
+            parseTzOffsetMinutes(req.query.tzOffset),
+          )
+        : undefined;
+
+      // Répartition par statut avec montants cumulés (agrégation Prisma, pas de plafond)
+      const byStatus = includeList.includes('statuses')
+        ? Object.fromEntries(
+            (
+              await prisma.conversion.groupBy({
+                by: ['status'],
+                _count: { id: true },
+                _sum: { amount: true },
+                where: whereClause,
+              })
+            ).map((row) => {
+              const amount = Number(row._sum.amount ?? 0);
+
+              return [
+                row.status,
+                {
+                  count: row._count.id ?? 0,
+                  amount: Number.isFinite(amount) ? amount : 0,
+                },
+              ];
+            }),
+          )
+        : undefined;
+
       return res.json({
         data: conversions,
         total,
         page,
         limit,
         totalPages: Math.max(1, Math.ceil(total / limit)),
+        ...(monthly ? { monthly } : {}),
+        ...(byStatus ? { byStatus } : {}),
       });
     } catch (error) {
       next(error);

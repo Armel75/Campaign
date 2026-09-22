@@ -22,7 +22,7 @@ interface KpiTarget {
 
 const KPI_DEFINITIONS: { kpiName: string; label: string; suffix: string }[] = [
   { kpiName: 'SOLD_QUANTITY', label: 'Qté globale à vendre', suffix: 'unités' },
-  { kpiName: 'REVENUE', label: 'Revenu total', suffix: 'FCFA' },
+  { kpiName: 'REVENUE', label: 'Objectif de revenu (KPI)', suffix: 'FCFA' },
   { kpiName: 'LEADS', label: 'Leads', suffix: 'leads' },
   { kpiName: 'CONVERSIONS', label: 'Conversions', suffix: 'conversions' },
   { kpiName: 'CLIENTS', label: 'Clients', suffix: 'clients' },

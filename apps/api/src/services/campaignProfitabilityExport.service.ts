@@ -130,7 +130,9 @@ export async function exportProfitabilityToExcel(
   const metricsRight = [
     ['ROI Global', formatPercent(overview.globalRoiPercent), ''],
     ['Budget Total', formatCurrency(overview.totalBudget), ''],
-    ['Dépenses Total', formatCurrency(overview.totalExpenses), ''],
+    // Le coût d'une campagne = son budget total : une ligne « Dépenses » ferait doublon
+    // avec « Budget Total » et serait trompeuse (aucune dépense n'entre dans le calcul).
+    ['Profit Net (cumul)', formatCurrency(overview.totalProfit), ''],
     ['Revenu Total', formatCurrency(overview.totalRevenue), ''],
   ];
 

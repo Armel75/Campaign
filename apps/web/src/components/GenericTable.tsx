@@ -40,6 +40,12 @@ interface GenericTableProps {
   filters?: TableFilter[];
 
   actionsAllowed?: boolean;
+  /** Masque le bouton « Créer » (ex. permission absente). Par défaut : visible. */
+  canCreate?: boolean;
+  /** Contrôle le bouton « Modifier » ligne par ligne. Par défaut : visible. */
+  canEditRow?: (row: any) => boolean;
+  /** Contrôle le bouton « Supprimer » ligne par ligne. Par défaut : visible. */
+  canDeleteRow?: (row: any) => boolean;
   extraActions?: React.ReactNode;
   refreshKey?: number;
 }
@@ -58,6 +64,9 @@ export default function GenericTable({
   searchPlaceholder = 'Rechercher...',
   filters = [],
   actionsAllowed = true,
+  canCreate = true,
+  canEditRow,
+  canDeleteRow,
   extraActions,
   refreshKey,
 }: GenericTableProps) {
@@ -338,7 +347,7 @@ export default function GenericTable({
         <CardTitle>{title}</CardTitle>
         <div className="flex items-center gap-2">
           {extraActions}
-          {actionsAllowed && createPath && (
+          {actionsAllowed && canCreate && createPath && (
             <Button onClick={() => navigate(createPath)}>
               <Plus className="mr-2 h-4 w-4" /> Créer
             </Button>
@@ -429,7 +438,7 @@ export default function GenericTable({
                           </Button>
                         )}
 
-                        {actionsAllowed && onEdit && (
+                        {actionsAllowed && onEdit && (!canEditRow || canEditRow(row)) && (
                           <Button
                             variant="ghost"
                             size="sm"
@@ -440,7 +449,7 @@ export default function GenericTable({
                           </Button>
                         )}
 
-                        {actionsAllowed && (
+                        {actionsAllowed && (!canDeleteRow || canDeleteRow(row)) && (
                           <Button
                             variant="ghost"
                             size="sm"

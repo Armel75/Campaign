@@ -88,6 +88,23 @@ model Role {
   @@map("roles")
 }
 
+// ───────────────────────────────────────────────────────────────────────────────
+// BudgetPlan / BudgetLine / Expense : suivi budgétaire DÉTAILLÉ
+//
+// ⚠️ CES TABLES N'ALIMENTENT AUCUN INDICATEUR FINANCIER.
+// Règle métier unique (validée) : le coût d'une campagne = `Campaign.totalBudget`, et
+// rien d'autre. L'ancien calcul prenait `Σ Expense.amount` avec un repli sur `totalBudget`,
+// ce qui donnait DEUX coûts possibles pour une même campagne (ROI vs rapport de rentabilité).
+// Le ROI, la rentabilité, le pilotage stratégique et les exports Excel utilisent tous
+// désormais `Campaign.totalBudget` comme seule source de coût.
+//
+// ⚠️ AVANT DE REBRANCHER CES TABLES SUR UN COÛT : définir d'abord une règle de
+// réconciliation avec `Campaign.totalBudget` (par ex. `totalBudget = Σ BudgetLine.plannedAmount`
+// à l'enregistrement d'une campagne), sinon le problème des deux coûts revient.
+//
+// Note : aucune interface ne permet de créer des plans/lignes budgétaires (seuls les
+// formulaires de dépense sélectionnent une ligne existante) et le seed n'en crée aucun.
+// ───────────────────────────────────────────────────────────────────────────────
 model BudgetPlan {
   id          Int         @id @default(autoincrement())
   name        String
@@ -139,7 +156,12 @@ model Campaign {
   startDate     DateTime  @map("start_date")
   endDate       DateTime  @map("end_date")
   status        String
+  // `budgetPlanId` : rattachement à un plan budgétaire détaillé — PUREMENT informatif.
+  // ⚠️ Le coût de la campagne est `totalBudget` et lui seul : aucun indicateur ne
+  // somme les lignes ni les dépenses du plan (voir la note au-dessus de `model BudgetPlan`).
   budgetPlanId  Int?      @map("budget_plan_id")
+  // Coût unique et officiel de la campagne : base du ROI, du profit et des rapports.
+  // Saisi dans le formulaire de campagne (obligatoire côté UI) ; `null` => ROI non calculable.
   totalBudget   Decimal?  @map("total_budget")
   createdById   Int       @map("created_by")
   createdAt     DateTime  @default(now()) @map("created_at")
@@ -347,6 +369,9 @@ model LeadActivity {
   @@map("lead_activities")
 }
 
+// Suivi opérationnel des dépenses (saisie et historique).
+// ⚠️ Ces montants n'entrent dans AUCUN coût, profit, ROI ni rapport financier :
+// le coût d'une campagne est `Campaign.totalBudget` (voir la note au-dessus de `model BudgetPlan`).
 model Expense {
   id           Int   @id @default(autoincrement())
   budgetLineId Int       @map("budget_line_id")

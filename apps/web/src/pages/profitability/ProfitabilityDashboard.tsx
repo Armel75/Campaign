@@ -41,6 +41,13 @@ import {
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
+/** Statuts partagés avec l'API (services/roiStatus.ts). */
+type CampaignRoiStatus =
+  | 'CALCULATED'
+  | 'ZERO_COST_ZERO_REVENUE'
+  | 'NON_CALCULABLE_ZERO_COST'
+  | 'NO_ESTABLISHED_REVENUE';
+
 type MonthMetrics = {
   month: number;
   year: number;
@@ -49,6 +56,8 @@ type MonthMetrics = {
   totalCost: number;
   totalProfit: number;
   roiPercent: number | null;
+  /** `NO_ESTABLISHED_REVENUE` ⇒ ni ROI ni profit affichables pour le mois. */
+  roiStatus?: CampaignRoiStatus;
   newLeads: number;
   newConversions: number;
   campaignsCreated: number;
@@ -89,6 +98,7 @@ type StrategicOverview = {
   totalRevenue: number;
   totalProfit: number;
   globalRoiPercent: number | null;
+  globalRoiStatus?: CampaignRoiStatus;
 };
 
 type ProfitabilityByObjective = {
@@ -101,6 +111,7 @@ type ProfitabilityByObjective = {
   totalCost: number;
   totalProfit: number;
   roiPercent: number | null;
+  roiStatus?: CampaignRoiStatus;
 };
 
 type AcquisitionCosts = {
@@ -344,6 +355,10 @@ export default function ProfitabilityDashboard() {
 
   const { currentMonth, previousMonth, comparison, overview, acquisitionCosts, profitabilityByObjective, monthlyTrends, topCampaignsByRoi, bottomCampaignsByRoi, availableMonths } = data!;
 
+  // Aucune vente confirmée sur le mois ⇒ ni ROI ni profit affichables (règle produit,
+  // identique au tableau de bord et au pilotage stratégique).
+  const revenueNotEstablished = currentMonth?.roiStatus === 'NO_ESTABLISHED_REVENUE';
+
   // Mois actuellement affiché (depuis la réponse API)
   const activeMonth = data!.selectedMonth;
   const activeYear = data!.selectedYear;
@@ -492,7 +507,14 @@ export default function ProfitabilityDashboard() {
             <Percent className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
+            <div
+              className="text-2xl font-bold"
+              title={
+                revenueNotEstablished
+                  ? 'Aucune vente confirmée sur le mois : le ROI n’est pas calculable (le budget des campagnes démarrées n’est pas une perte)'
+                  : undefined
+              }
+            >
               {formatRoiDisplay(currentMonth?.roiPercent ?? null)}
             </div>
             {comparison && (
@@ -542,8 +564,23 @@ export default function ProfitabilityDashboard() {
             <TrendingUp className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className={`text-2xl font-bold ${(currentMonth?.totalProfit ?? 0) >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-              {currentMonth ? formatCurrency(currentMonth.totalProfit) : '—'}
+            <div
+              className={`text-2xl font-bold ${
+                !currentMonth || revenueNotEstablished
+                  ? ''
+                  : currentMonth.totalProfit >= 0
+                    ? 'text-green-600'
+                    : 'text-red-500'
+              }`}
+              title={
+                revenueNotEstablished
+                  ? 'Aucune vente confirmée sur le mois : le profit n’est pas établi (le coût correspond au budget des campagnes démarrées ce mois)'
+                  : undefined
+              }
+            >
+              {currentMonth && !revenueNotEstablished
+                ? formatCurrency(currentMonth.totalProfit)
+                : '—'}
             </div>
             {comparison && (
               <div className={`flex items-center gap-1 text-xs mt-1 ${getTrendColor(comparison.profitChangePercent)}`}>
@@ -693,7 +730,9 @@ export default function ProfitabilityDashboard() {
                         previous: previousMonth.totalProfit,
                         change: comparison.profitChange,
                         changePercent: comparison.profitChangePercent,
-                        format: formatCurrency,
+                        // Même règle que la carte : pas de profit affiché sans vente confirmée
+                        format: (v: number | null) =>
+                          revenueNotEstablished || v === null ? '—' : formatCurrency(v),
                         inverse: false,
                       },
                       {
@@ -952,6 +991,8 @@ export default function ProfitabilityDashboard() {
                 <tbody>
                   {profitabilityByObjective.length > 0 ? (
                     profitabilityByObjective.map((obj) => {
+                      const objectiveRevenueNotEstablished =
+                        obj.roiStatus === 'NO_ESTABLISHED_REVENUE';
                       const roiPositive = (obj.roiPercent ?? 0) >= 0;
                       return (
                         <tr key={obj.objectiveId} className="border-b last:border-0 hover:bg-muted/30">
@@ -962,11 +1003,15 @@ export default function ProfitabilityDashboard() {
                             {formatCurrency(obj.totalRevenueFromConversions)}
                           </td>
                           <td className="text-right py-3 px-2">{formatCurrency(obj.totalCost)}</td>
-                          <td className={`text-right py-3 px-2 font-bold ${obj.totalProfit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                            {formatCurrency(obj.totalProfit)}
+                          <td className={`text-right py-3 px-2 font-bold ${
+                            objectiveRevenueNotEstablished ? '' : obj.totalProfit >= 0 ? 'text-green-600' : 'text-red-500'
+                          }`}>
+                            {objectiveRevenueNotEstablished ? '—' : formatCurrency(obj.totalProfit)}
                           </td>
-                          <td className={`text-right py-3 px-2 font-bold ${roiPositive ? 'text-green-600' : 'text-red-500'}`}>
-                            {formatRoiDisplay(obj.roiPercent)}
+                          <td className={`text-right py-3 px-2 font-bold ${
+                            objectiveRevenueNotEstablished ? '' : roiPositive ? 'text-green-600' : 'text-red-500'
+                          }`}>
+                            {objectiveRevenueNotEstablished ? '—' : formatRoiDisplay(obj.roiPercent)}
                           </td>
                         </tr>
                       );
@@ -992,7 +1037,21 @@ export default function ProfitabilityDashboard() {
             <CardTitle className="text-sm font-medium text-muted-foreground">ROI Global</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className={`text-lg font-bold ${(overview.globalRoiPercent ?? 0) >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+            <div
+              className={`text-lg font-bold ${
+                overview.globalRoiStatus === 'NO_ESTABLISHED_REVENUE' ||
+                overview.globalRoiPercent === null
+                  ? ''
+                  : overview.globalRoiPercent >= 0
+                    ? 'text-green-600'
+                    : 'text-red-500'
+              }`}
+              title={
+                overview.globalRoiStatus === 'NO_ESTABLISHED_REVENUE'
+                  ? 'Aucune vente confirmée sur le périmètre : le ROI n’est pas calculable'
+                  : undefined
+              }
+            >
               {formatRoiDisplay(overview.globalRoiPercent)}
             </div>
           </CardContent>
@@ -1010,10 +1069,10 @@ export default function ProfitabilityDashboard() {
 
         <Card className="rounded-2xl">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Dépenses Réelles</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Profit Net (cumul)</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-lg font-bold">{formatCurrency(overview.totalExpenses)}</div>
+            <div className="text-lg font-bold">{formatCurrency(overview.totalProfit)}</div>
           </CardContent>
         </Card>
 

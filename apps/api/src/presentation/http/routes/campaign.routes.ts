@@ -18,6 +18,8 @@ import {
   ArticleCodeRef,
 } from '../../../services/x3Sales.service';
 import { getCurrentUserWithRole } from '../../../services/user.service';
+import { parseDateRange } from '../../../infrastructure/utils/dateRange';
+import { parseIncludeList } from '../../../infrastructure/utils/queryParams';
 import {
   getCampaignRoiSummary,
   getCampaignRoiDashboardSummary,
@@ -27,6 +29,10 @@ import {
   getProfitabilityReport,
 } from '../../../services/campaignProfitability.service';
 import { exportProfitabilityToExcel } from '../../../services/campaignProfitabilityExport.service';
+import { getCampaignSalesRevenue, getCampaignX3ArticlesRevenue } from '../../../services/campaignSalesRevenue.service';
+import { getX3RevenueMeasureJob, startX3RevenueMeasureJob, getSalesLast3MonthsMeasureJob, startSalesLast3MonthsMeasureJob } from '../../../services/campaignMeasureJobs.service';
+import { exportSalesRankingToExcel } from '../../../services/campaignSalesRankingExport.service';
+import { canDeleteTask } from '../../../services/taskPermissions';
 import {
   CAMPAIGN_UPLOADS_DIR,
   ensureUploadsDirectories,
@@ -260,12 +266,25 @@ router.get('/', requireAuth, async (req, res, next) => {
     const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? rawLimit : 10;
     const skip = (page - 1) * limit;
 
+    // Bornes de période (facultatives) : une campagne est retenue si sa période
+    // [startDate, endDate] CHEVAUCHE la période demandée.
+    const overlapRange = parseDateRange(
+      req.query as Record<string, unknown>,
+      'overlapFrom',
+      'overlapTo',
+    );
+    if (overlapRange.error) {
+      return res.status(400).json({ message: overlapRange.error });
+    }
+
     const where = {
       ...(currentUser.role?.canViewAllCampaigns
         ? {}
         : { createdById: currentUser.id }),
       ...(status ? { status } : {}),
       ...(objectiveId && !Number.isNaN(objectiveId) ? { objectiveId } : {}),
+      ...(overlapRange.gte ? { endDate: { gte: overlapRange.gte } } : {}),
+      ...(overlapRange.lte ? { startDate: { lte: overlapRange.lte } } : {}),
     };
 
     const total = await prisma.campaign.count({ where });
@@ -324,6 +343,31 @@ router.get('/', requireAuth, async (req, res, next) => {
 
     const totalPages = total === 0 ? 1 : Math.ceil(total / limit);
 
+    // Compteurs par statut et budget cumulé, calculés sur TOUT le périmètre filtré
+    // (indépendants de la pagination) : `?include=statuses`
+    const includeList = parseIncludeList(req.query.include);
+    let statusCounts: Record<string, number> | undefined;
+    let totalBudget: number | undefined;
+
+    if (includeList.includes('statuses')) {
+      const grouped = await prisma.campaign.groupBy({
+        by: ['status'],
+        _count: { id: true },
+        _sum: { totalBudget: true },
+        where,
+      });
+
+      statusCounts = Object.fromEntries(
+        grouped.map((row) => [row.status, row._count.id ?? 0]),
+      );
+
+      totalBudget = grouped.reduce((sum, row) => {
+        const value = Number(row._sum.totalBudget ?? 0);
+
+        return sum + (Number.isFinite(value) ? value : 0);
+      }, 0);
+    }
+
     res.json({
       data: campaigns,
       meta: {
@@ -334,6 +378,8 @@ router.get('/', requireAuth, async (req, res, next) => {
         hasNextPage: page < totalPages,
         hasPreviousPage: page > 1,
       },
+      ...(statusCounts ? { statusCounts } : {}),
+      ...(totalBudget !== undefined ? { totalBudget } : {}),
     });
   } catch (error) {
     next(error);
@@ -444,8 +490,17 @@ router.get('/roi/dashboard-summary', requireAuth, async (req, res, next) => {
     const currentUser = await getAuthorizedUser(r, res);
     if (!currentUser) return;
 
+    // Bornes de période (facultatives) : le revenu est alors limité à la période,
+    // le coût reste le budget total de la campagne (voir campaignRoi.service).
+    const periodRange = parseDateRange(req.query as Record<string, unknown>);
+    if (periodRange.error) {
+      return res.status(400).json({ message: periodRange.error });
+    }
+
     const roiDashboardSummary = await getCampaignRoiDashboardSummary({
       createdById: currentUser.role?.canViewAllCampaigns ? undefined : currentUser.id,
+      from: periodRange.gte,
+      to: periodRange.lte,
     });
 
     res.json({ data: roiDashboardSummary });
@@ -471,6 +526,104 @@ router.get('/:id/roi', requireAuth, async (req, res, next) => {
     const roiSummary = await getCampaignRoiSummary(campaignId);
 
     res.json({ data: roiSummary });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Plafond du budget X3 acceptable via l'API pour la mesure SYNCHRONE d'une campagne.
+ *
+ * ABSENT (fiche campagne) : aucun plafond — la fiche campagne doit pouvoir attendre le résultat
+ * aussi longtemps que nécessaire. FOURNI (tableau de bord) : passe bornée, pour que l'affichage
+ * ne dépende jamais d'une seule campagne lente.
+ */
+const X3_REVENUE_BUDGET_MAX_MS = 20_000;
+
+// Route : CA facturé Sage X3 des articles d'une campagne (indicateur séparé du ROI)
+// Endpoint distinct et non bloquant : la fiche campagne affiche le ROI immédiatement,
+// puis cette valeur dès qu'elle est disponible.
+router.get('/:id/x3-revenue', requireAuth, async (req, res, next) => {
+  try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    const campaignId = toValidNumber(req.params.id, 'campaignId');
+    const campaignOwnership = await getCampaignOr404(campaignId, res);
+    if (!campaignOwnership) return;
+
+    if (!canViewCampaign(currentUser, campaignOwnership.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette campagne' });
+    }
+
+    // Budget optionnel : absent = aucun plafond (fiche campagne), fourni = borné (tableau de bord).
+    const requestedBudgetMs = Number(req.query.budgetMs);
+    const budgetMs =
+      Number.isFinite(requestedBudgetMs) && requestedBudgetMs > 0
+        ? Math.min(Math.floor(requestedBudgetMs), X3_REVENUE_BUDGET_MAX_MS)
+        : undefined;
+
+    const x3Revenue = await getCampaignX3ArticlesRevenue(campaignId, { budgetMs });
+
+    res.json({ data: x3Revenue });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Mesure X3 en TÂCHE DE FOND (CA facturé + clients distincts) — utilisée par la fiche campagne.
+ *
+ * Rend la main immédiatement (202) : aucune requête HTTP longue ne peut être coupée par le
+ * reverse proxy. Le client interroge ensuite `GET /:id/x3-revenue/measure`.
+ * `?force=1` : relance une mesure même si un résultat récent est déjà connu (bouton « Mesurer »).
+ */
+router.post('/:id/x3-revenue/measure', requireAuth, async (req, res, next) => {
+  try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    const campaignId = toValidNumber(req.params.id, 'campaignId');
+    const campaignOwnership = await getCampaignOr404(campaignId, res);
+    if (!campaignOwnership) return;
+
+    if (!canViewCampaign(currentUser, campaignOwnership.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette campagne' });
+    }
+
+    const force = String(req.query.force ?? '') === '1';
+    const job = startX3RevenueMeasureJob(campaignId, { force });
+
+    res.status(202).json({ data: job });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * État de la mesure X3 en tâche de fond d'une campagne.
+ * `status: 'unknown'` = aucune mesure connue (API redémarrée, résultat expiré) → le client peut
+ * relancer via le POST. Les appels de suivi sont courts : aucun risque de coupure par un proxy.
+ */
+router.get('/:id/x3-revenue/measure', requireAuth, async (req, res, next) => {
+  try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    const campaignId = toValidNumber(req.params.id, 'campaignId');
+    const campaignOwnership = await getCampaignOr404(campaignId, res);
+    if (!campaignOwnership) return;
+
+    if (!canViewCampaign(currentUser, campaignOwnership.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette campagne' });
+    }
+
+    const job = getX3RevenueMeasureJob(campaignId);
+
+    res.json({ data: job ?? { campaignId, status: 'unknown' } });
   } catch (error) {
     next(error);
   }
@@ -648,6 +801,64 @@ router.get('/:id/sales-last-3-months', requireAuth, async (req, res, next) => {
   }
 });
 
+/**
+ * Ventes des 3 mois précédents en TÂCHE DE FOND — utilisée par le tableau de bord.
+ *
+ * Rend la main immédiatement (202) : chaque carreau est ainsi indépendant des autres, une
+ * campagne lente ne bloque plus l'affichage des suivantes. Le client interroge ensuite
+ * `GET /:id/sales-last-3-months/measure`.
+ * `?force=1` : relance une mesure même si un résultat récent est déjà connu.
+ */
+router.post('/:id/sales-last-3-months/measure', requireAuth, async (req, res, next) => {
+  try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    const campaignId = toValidNumber(req.params.id, 'campaignId');
+    const campaignOwnership = await getCampaignOr404(campaignId, res);
+    if (!campaignOwnership) return;
+
+    if (!canViewCampaign(currentUser, campaignOwnership.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette campagne' });
+    }
+
+    const force = String(req.query.force ?? '') === '1';
+    const job = startSalesLast3MonthsMeasureJob(campaignId, { force });
+
+    res.status(202).json({ data: job });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * État de la mesure « ventes des 3 mois » d'une campagne.
+ * `status: 'unknown'` = aucune mesure connue (API redémarrée, résultat expiré) → le client peut
+ * relancer via le POST.
+ */
+router.get('/:id/sales-last-3-months/measure', requireAuth, async (req, res, next) => {
+  try {
+    const r = req as AuthRequest;
+    const currentUser = await getAuthorizedUser(r, res);
+    if (!currentUser) return;
+
+    const campaignId = toValidNumber(req.params.id, 'campaignId');
+    const campaignOwnership = await getCampaignOr404(campaignId, res);
+    if (!campaignOwnership) return;
+
+    if (!canViewCampaign(currentUser, campaignOwnership.createdById)) {
+      return res.status(403).json({ message: 'Accès refusé à cette campagne' });
+    }
+
+    const job = getSalesLast3MonthsMeasureJob(campaignId);
+
+    res.json({ data: job ?? { campaignId, status: 'unknown' } });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Route batch : ventes des 3 derniers mois par campagne (tableau de bord)
 router.post('/sales-last-3-months', requireAuth, async (req, res, next) => {
   try {
@@ -708,6 +919,13 @@ router.post('/export-excel-batch', requireAuth, async (req, res, next) => {
   }
 });
 
+/**
+ * Plafond du budget X3 acceptable via l'API. Un client peut demander une passe bornée
+ * (tableau de bord : affichage non bloquant), mais jamais monopoliser le pool X3 partagé
+ * avec les crons : au-delà de cette valeur, la demande est ramenée à ce maximum.
+ */
+const SALES_SUMMARY_X3_BUDGET_MAX_MS = 20_000;
+
 // Route batch : montant total des ventes par campagne pour la liste
 router.post('/sales-summary', requireAuth, async (req, res, next) => {
   try {
@@ -715,68 +933,90 @@ router.post('/sales-summary', requireAuth, async (req, res, next) => {
     const campaignIds: number[] = Array.isArray(body.campaignIds) ? body.campaignIds.map(Number).filter((id: number) => !isNaN(id)) : [];
 
     if (campaignIds.length === 0) {
-      return res.json({ data: {} });
+      return res.json({ data: {}, perimeter: {} });
     }
 
-    const campaigns = await prisma.campaign.findMany({
-      where: { id: { in: campaignIds } },
-      select: {
-        id: true,
-        startDate: true,
-        endDate: true,
-        articles: {
-          select: { id: true, codeSageX3: true, codeSage100: true },
-        },
-      },
+    // Budget optionnel : absent (comportement historique) = aucun plafond.
+    const requestedBudgetMs = Number(body.budgetMs);
+    const budgetMs =
+      Number.isFinite(requestedBudgetMs) && requestedBudgetMs > 0
+        ? Math.min(Math.floor(requestedBudgetMs), SALES_SUMMARY_X3_BUDGET_MAX_MS)
+        : undefined;
+
+    // Clients distincts : mesure optionnelle (coûte une requête X3 de plus par campagne).
+    const includeDistinctClients = body.includeDistinctClients === true;
+
+    // Calcul mutualisé avec l'export Excel du classement (source unique + cache TTL court).
+    const { data, errors, perimeter, clients } = await getCampaignSalesRevenue(campaignIds, {
+      budgetMs,
+      includeDistinctClients,
     });
 
-    const results: Record<number, number> = {};
-    const errors: Record<number, boolean> = {};
-
-    // Traitement séquentiel pour éviter la saturation du pool X3 (max 10 connexions)
-    for (const campaign of campaigns) {
-      if (!campaign.startDate || !campaign.endDate) {
-        results[campaign.id] = 0;
-        continue;
-      }
-
-      const articleRefs: ArticleCodeRef[] = campaign.articles
-        .filter(a => a.codeSage100 || a.codeSageX3)
-        .map(a => ({
-          articleId: a.id,
-          codeSage100: a.codeSage100,
-          codeSageX3: a.codeSageX3,
-        }));
-
-      if (articleRefs.length === 0) {
-        results[campaign.id] = 0;
-        continue;
-      }
-
-      try {
-        const effectiveEndDate = campaign.endDate > new Date() ? new Date() : campaign.endDate;
-
-        const salesAmounts = await getSalesAmountByArticle(
-          articleRefs,
-          campaign.startDate,
-          effectiveEndDate,
-        );
-
-        results[campaign.id] = Object.values(salesAmounts).reduce((sum, val) => sum + val, 0);
-      } catch (error) {
-        console.error(`Erreur X3 pour la campagne ${campaign.id}:`, error);
-        results[campaign.id] = 0;
-        errors[campaign.id] = true; // Marque l'erreur
-      }
-    }
-
-    res.json({ data: results, errors });
-
-    res.json({ data: results });
+    res.json({ data, errors, perimeter, clients });
   } catch (error) {
     next(error);
   }
 });
+
+/**
+ * Budget accordé à la passe X3 lors de l'export du classement. Au-delà, les campagnes
+ * non encore calculées ressortent en « N/A » dans le fichier. Une requête X3 pouvant
+ * coûter jusqu'à 60 s, ce plafond évite un export qui « tourne » plusieurs minutes.
+ */
+const SALES_RANKING_EXPORT_X3_BUDGET_MS = 20_000;
+
+// Route : export Excel du classement des ventes (page « Ventes par campagne »)
+router.get(
+  '/sales-ranking/export',
+  requireAuth,
+  requirePermission('canExportCampaign'),
+  async (req, res, next) => {
+    try {
+      const r = req as AuthRequest;
+      const currentUser = await getAuthorizedUser(r, res);
+      if (!currentUser) return;
+
+      // Périmètre : toutes les campagnes accessibles à l'utilisateur, sans plafond de
+      // pagination — le fichier doit refléter le total réel, contrairement à l'affichage.
+      const campaigns = await prisma.campaign.findMany({
+        where: currentUser.role?.canViewAllCampaigns ? {} : { createdById: currentUser.id },
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          startDate: true,
+          endDate: true,
+          articles: {
+            select: { soldQuantity: true },
+          },
+        },
+        orderBy: { id: 'asc' },
+      });
+
+      const { data, errors } = await getCampaignSalesRevenue(
+        campaigns.map((campaign) => campaign.id),
+        { budgetMs: SALES_RANKING_EXPORT_X3_BUDGET_MS },
+      );
+
+      const buffer = await exportSalesRankingToExcel({
+        campaigns,
+        revenueByCampaignId: data,
+        revenueErrors: errors,
+      });
+
+      const fileName = `classement-ventes-${new Date().toISOString().slice(0, 10)}.xlsx`;
+
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.send(buffer);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 router.get('/:id', requireAuth, async (req, res, next) => {
   try {
@@ -1228,6 +1468,26 @@ router.delete('/:id/tasks/:taskId', requireAuth, async (req, res, next) => {
     }
 
     const taskId = toValidNumber(req.params.taskId, 'taskId');
+
+    const existingTask = await prisma.task.findUnique({
+      where: { id: taskId },
+      select: {
+        id: true,
+        createdById: true,
+      },
+    });
+
+    if (!existingTask) {
+      return res.status(404).json({ message: 'Tâche introuvable' });
+    }
+
+    // Règle métier identique à `DELETE /tasks/:id` : seul le créateur de la tâche peut la
+    // supprimer (exception : profil disposant de `canDeleteAllCampaigns`).
+    if (!canDeleteTask(currentUser.id, currentUser.role, existingTask.createdById)) {
+      return res.status(403).json({
+        message: 'Accès refusé : seul le créateur de la tâche peut la supprimer',
+      });
+    }
 
     await prisma.task.delete({
       where: { id: taskId },

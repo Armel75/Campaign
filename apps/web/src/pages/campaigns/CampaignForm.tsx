@@ -337,10 +337,10 @@ export default function CampaignForm() {
           </div>
         )}
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" autoComplete="off">
           <div className="space-y-2">
             <Label htmlFor="name">Nom <span className="text-red-500">*</span></Label>
-            <Input id="name" {...register('name', { required: true })} disabled={isCompletedCampaign} />
+            <Input id="name" {...register('name', { required: true })} autoComplete="off" disabled={isCompletedCampaign} />
           </div>
 
           <div className="space-y-2">
@@ -349,6 +349,7 @@ export default function CampaignForm() {
               id="description"
               rows={3}
               {...register('description')}
+              autoComplete="off"
               disabled={isCompletedCampaign}
               className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
             />
@@ -360,6 +361,7 @@ export default function CampaignForm() {
               id="strategy"
               rows={4}
               {...register('strategy')}
+              autoComplete="off"
               disabled={isCompletedCampaign}
               placeholder="Décrivez votre stratégie marketing pour cette campagne…"
               className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
@@ -371,6 +373,7 @@ export default function CampaignForm() {
             <select
               id="objectiveId"
               {...register('objectiveId', { required: true })}
+              autoComplete="off"
               disabled={isCompletedCampaign}
               className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
             >
@@ -386,12 +389,12 @@ export default function CampaignForm() {
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="startDate">Date Début campagne <span className="text-red-500">*</span></Label>
-              <Input id="startDate" type="date" {...register('startDate', { required: true })} disabled={isCompletedCampaign} />
+              <Input id="startDate" type="date" {...register('startDate', { required: true })} autoComplete="off" disabled={isCompletedCampaign} />
             </div>
 
             <div className="space-y-2">
               <Label htmlFor="endDate">Date Fin campagne <span className="text-red-500">*</span></Label>
-              <Input id="endDate" type="date" {...register('endDate', { required: true })} disabled={isCompletedCampaign} />
+              <Input id="endDate" type="date" {...register('endDate', { required: true })} autoComplete="off" disabled={isCompletedCampaign} />
             </div>
           </div>
 
@@ -404,6 +407,7 @@ export default function CampaignForm() {
               step="1"
               placeholder="0"
               {...register('totalBudget', { required: true })}
+              autoComplete="off"
               disabled={isCompletedCampaign}
             />
             <p className="text-xs text-muted-foreground/70 italic">
@@ -416,6 +420,7 @@ export default function CampaignForm() {
             <select
               id="status"
               {...register('status', { required: true })}
+              autoComplete="off"
               disabled={isCompletedCampaign}
               className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
             >

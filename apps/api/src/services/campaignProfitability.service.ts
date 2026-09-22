@@ -5,6 +5,7 @@ import {
   AcquisitionCosts,
   MonthlyTrend,
 } from './campaignStrategic.service';
+import { resolveRoi, CampaignRoiStatus } from './roiStatus';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -18,6 +19,8 @@ export type MonthMetrics = {
   totalCost: number;
   totalProfit: number;
   roiPercent: number | null;
+  /** `NO_ESTABLISHED_REVENUE` ⇒ ROI non affichable (aucune vente confirmée sur le mois). */
+  roiStatus: CampaignRoiStatus;
   newLeads: number;
   newConversions: number;
   campaignsCreated: number;
@@ -88,14 +91,6 @@ function formatMonthLabel(month: number, year: number): string {
   return `${MONTH_LABELS[month - 1] ?? month} ${year}`;
 }
 
-function computeRoiPercent(totalCost: number, totalRevenue: number): number | null {
-  if (totalCost > 0) {
-    return roundTo2(((totalRevenue - totalCost) / totalCost) * 100);
-  }
-  if (totalRevenue > 0) return null; // Revenu sans coût → non calculable
-  return 0;
-}
-
 // ---------------------------------------------------------------------------
 // Service principal
 // ---------------------------------------------------------------------------
@@ -132,6 +127,8 @@ export async function getProfitabilityReport(
 
   if (currentTrend) {
     const profit = currentTrend.confirmedRevenue - currentTrend.totalCost;
+    // Statut + pourcentage : calcul partagé (services/roiStatus.ts)
+    const roi = resolveRoi(currentTrend.totalCost, currentTrend.confirmedRevenue);
     currentMonthData = {
       month: currentTrend.month,
       year: currentTrend.year,
@@ -139,7 +136,8 @@ export async function getProfitabilityReport(
       totalRevenue: currentTrend.confirmedRevenue,
       totalCost: currentTrend.totalCost,
       totalProfit: roundTo2(profit),
-      roiPercent: computeRoiPercent(currentTrend.totalCost, currentTrend.confirmedRevenue),
+      roiPercent: roi.roiPercent === null ? null : roundTo2(roi.roiPercent),
+      roiStatus: roi.roiStatus,
       newLeads: currentTrend.newLeads,
       newConversions: currentTrend.newConversions,
       campaignsCreated: currentTrend.campaignsCreated,
@@ -160,6 +158,7 @@ export async function getProfitabilityReport(
 
     if (prevTrend) {
       const prevProfit = prevTrend.confirmedRevenue - prevTrend.totalCost;
+      const prevRoi = resolveRoi(prevTrend.totalCost, prevTrend.confirmedRevenue);
       previousMonthData = {
         month: prevTrend.month,
         year: prevTrend.year,
@@ -167,7 +166,8 @@ export async function getProfitabilityReport(
         totalRevenue: prevTrend.confirmedRevenue,
         totalCost: prevTrend.totalCost,
         totalProfit: roundTo2(prevProfit),
-        roiPercent: computeRoiPercent(prevTrend.totalCost, prevTrend.confirmedRevenue),
+        roiPercent: prevRoi.roiPercent === null ? null : roundTo2(prevRoi.roiPercent),
+        roiStatus: prevRoi.roiStatus,
         newLeads: prevTrend.newLeads,
         newConversions: prevTrend.newConversions,
         campaignsCreated: prevTrend.campaignsCreated,
@@ -182,6 +182,7 @@ export async function getProfitabilityReport(
     const lastIdx = monthlyTrends.length - 1;
     const last = monthlyTrends[lastIdx];
     const profit = last.confirmedRevenue - last.totalCost;
+    const lastRoi = resolveRoi(last.totalCost, last.confirmedRevenue);
     currentMonthData = {
       month: last.month,
       year: last.year,
@@ -189,7 +190,8 @@ export async function getProfitabilityReport(
       totalRevenue: last.confirmedRevenue,
       totalCost: last.totalCost,
       totalProfit: roundTo2(profit),
-      roiPercent: computeRoiPercent(last.totalCost, last.confirmedRevenue),
+      roiPercent: lastRoi.roiPercent === null ? null : roundTo2(lastRoi.roiPercent),
+      roiStatus: lastRoi.roiStatus,
       newLeads: last.newLeads,
       newConversions: last.newConversions,
       campaignsCreated: last.campaignsCreated,
@@ -199,6 +201,7 @@ export async function getProfitabilityReport(
     if (monthlyTrends.length >= 2) {
       const prev = monthlyTrends[lastIdx - 1];
       const prevProfit = prev.confirmedRevenue - prev.totalCost;
+      const prevRoi = resolveRoi(prev.totalCost, prev.confirmedRevenue);
       previousMonthData = {
         month: prev.month,
         year: prev.year,
@@ -206,7 +209,8 @@ export async function getProfitabilityReport(
         totalRevenue: prev.confirmedRevenue,
         totalCost: prev.totalCost,
         totalProfit: roundTo2(prevProfit),
-        roiPercent: computeRoiPercent(prev.totalCost, prev.confirmedRevenue),
+        roiPercent: prevRoi.roiPercent === null ? null : roundTo2(prevRoi.roiPercent),
+        roiStatus: prevRoi.roiStatus,
         newLeads: prev.newLeads,
         newConversions: prev.newConversions,
         campaignsCreated: prev.campaignsCreated,

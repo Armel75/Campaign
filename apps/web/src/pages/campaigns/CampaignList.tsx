@@ -430,7 +430,11 @@ export default function CampaignList() {
                 <TableHead>Progression</TableHead>
                 <TableHead>Leads</TableHead>
                 <TableHead>Conv.</TableHead>
-                <TableHead>Vente de la campagne (FCFA)</TableHead>
+                <TableHead>
+                  <span title="CA facturé Sage X3 des articles de la campagne sur sa fenêtre (tous clients, tous vendeurs) : corrélation de périmètre, PAS une attribution à la campagne.">
+                    CA facturé des articles (Sage X3)
+                  </span>
+                </TableHead>
                 <TableHead>Total articles vendus</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
@@ -500,7 +504,20 @@ export default function CampaignList() {
                         const amount = campaignSales[campaign.id];
                         if (amount === undefined) return <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> calcul…</span>;
                         if (amount == null) return '—';
-                        return Number(amount).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' FCFA';
+                        const perimeter = campaign.articles?.length ?? 0;
+                        return (
+                          <div className="leading-tight">
+                            <div>
+                              {Number(amount).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} FCFA
+                            </div>
+                            <div
+                              className="text-xs text-muted-foreground"
+                              title="Nombre d'articles rattachés à la campagne : taille du périmètre sur lequel ce CA est mesuré."
+                            >
+                              {perimeter} article(s)
+                            </div>
+                          </div>
+                        );
                       })()}
                     </TableCell>
                     <TableCell>
